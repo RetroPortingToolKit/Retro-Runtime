@@ -1,7 +1,7 @@
 #pragma once
 
-// The runner's LINK mode: the hub spawned it with the control socket at fd
-// kSocketFd and the shared region at kSharedFd (src/corelink/link_protocol.hpp).
+// The runner's LINK mode: the hub spawned it holding the control channel and
+// the shared region (corelink/transport.hpp says where each OS puts them).
 
 #include "core_library.hpp"
 #include "core_manifest.hpp"
@@ -22,6 +22,7 @@ struct LinkArgs {
     std::map<std::string, std::string> overrides;
     std::optional<fs::path> load_state;
     std::string tpak_rom;
+    std::string link_handles; // --link-handles (Windows)
 };
 
 // Runs the session until the hub sends Quit or goes away. Returns the

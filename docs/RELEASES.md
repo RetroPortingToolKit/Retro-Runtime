@@ -35,8 +35,8 @@ archive against its recorded hash.
 
 | Asset | What |
 |---|---|
-| `retro-runtime-<version>-<platform>.tar.gz` | The runner, flat at the archive root: `retro-core-runner`, `LICENSE`, `licenses/SDL3.txt`. |
-| `….tar.gz.sha256` | That archive's SHA-256. |
+| `retro-runtime-<version>-<platform>.tar.gz` (`.zip` on Windows) | The runner, flat at the archive root: `retro-core-runner` (`.exe`), `LICENSE`, and `licenses/SDL3.txt` where SDL3 is built in. |
+| `<archive>.sha256` | That archive's SHA-256. |
 | `SHA256SUMS` | Every archive's SHA-256. |
 | `runtime-manifest.json` | What a host reads to update. |
 
@@ -44,12 +44,15 @@ Platforms, 2026-09-26:
 
 | Platform | State |
 |---|---|
-| `linux-x86_64` | Built on Ubuntu 22.04. |
-| `linux-arm64` | Built on Ubuntu 22.04 (arm). |
-| `windows-x86_64` | **Not available.** The link has no Windows transport (`CORE_LINK.md`). |
-| `macos-arm64`, `macos-x86_64` | **Not available.** No macOS transport: macOS has no `memfd` and no `SOCK_SEQPACKET` for `AF_UNIX`. |
+| Platform | Built on | Lends GL | Floor recorded |
+|---|---|---|---|
+| `linux-x86_64` | Ubuntu 22.04 | 4.3+, where the driver has it | `glibc`, from the binary's symbol versions |
+| `linux-arm64` | Ubuntu 22.04 (arm) | 4.3+, where the driver has it | `glibc` |
+| `macos-arm64`, `macos-x86_64` | macOS 14, **one universal archive** (`macos-universal`), the x86_64 slice run under Rosetta | **No.** macOS OpenGL stops at 4.1, so a `GL_COMPUTE` core runs its software path. It is built without SDL3 (ruling 2, `LINK_TRANSPORTS.md` §11) | `macos`, from `LC_BUILD_VERSION` (11.0) |
+| `windows-x86_64` | Windows Server 2022, MSVC, static CRT | 4.3+, where the driver has it | `windows: "10"`, the tested floor rather than a measured one |
+| `windows-arm64` | — | — | Listed as unavailable: not built yet |
 
-The manifest lists the unavailable platforms with that reason, so a host can
+A platform that cannot be served is listed with the reason, so a host can
 report it instead of finding the platform silently missing.
 
 ## The manifest
@@ -81,9 +84,12 @@ and a specific release's manifest is at `…/releases/download/v<version>/runtim
       "executable": "retro-core-runner",
       "files": ["retro-core-runner", "LICENSE", "licenses/SDL3.txt"],
       "requires": { "glibc": "<newest GLIBC_ symbol version it imports>" },
+                                        // or "macos": "11.0", or "windows": "10"
       "gl": true
     },
-    "windows-x86_64": { "unavailable": "the link has no Windows transport yet (docs/CORE_LINK.md)" }
+    "macos-arm64":   { "url": ".../retro-runtime-0.1.0-macos-universal.tar.gz", "gl": false, ... },
+    "macos-x86_64":  { "url": ".../retro-runtime-0.1.0-macos-universal.tar.gz", "gl": false, ... },
+    "windows-arm64": { "unavailable": "not built yet (docs/LINK_TRANSPORTS.md §8)" }
   }
 }
 ```
@@ -118,8 +124,9 @@ A build outside a release says `version dev`.
    `kProtocolMajor`. The minor does not matter, because the session
    negotiates it. The same applies to `rcore_abi.major` against the cores the
    host runs.
-4. On Linux, refuse the update if `requires.glibc` is newer than
-   `gnu_get_libc_version()`.
+4. Refuse the update if the machine is below `requires`: on Linux,
+   `requires.glibc` against `gnu_get_libc_version()`; on macOS,
+   `requires.macos` against the OS version.
 5. Compare `version` with the installed runner's `--version`. Update only if
    it is newer (the launcher's `release_tag_cmp` orders these).
 6. Download `url` and check `size` and `sha256` **before** extracting.

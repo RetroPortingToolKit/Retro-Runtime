@@ -56,27 +56,36 @@ std::uint32_t script_buttons(const std::string& s) {
 } // namespace
 
 int main(int argc, char** argv) {
+    // UTF-8 on every OS: Windows' argv is the ANSI code page (transport.hpp).
+    const std::vector<std::string> args = retro::corelink::utf8_args(argc, argv);
+    argc = static_cast<int>(args.size());
     LaunchSpec spec;
     spec.gl = false;
     std::uint64_t frames = 60;
     bool seat0 = true;
     std::vector<std::pair<std::uint64_t, std::uint32_t>> script;
     for (int i = 1; i < argc; ++i) {
-        const std::string a = argv[i];
+        const std::string a = args[i];
         auto val = [&]() -> std::string {
             if (i + 1 >= argc) die(a + " needs a value");
-            return argv[++i];
+            return args[++i];
         };
-        if (a == "--runner") spec.runner = val();
-        else if (a == "--core") spec.core = val();
+        if (a == "--runner") spec.runner = utf8_path(val());
+        else if (a == "--core") spec.core = utf8_path(val());
         else if (a == "--rom") spec.rom = val();
-        else if (a == "--title-dir") spec.title_dir = val();
-        else if (a == "--out") spec.session_dir = val();
+        else if (a == "--title-dir") spec.title_dir = utf8_path(val());
+        else if (a == "--out") spec.session_dir = utf8_path(val());
         else if (a == "--frames") frames = std::strtoull(val().c_str(), nullptr, 10);
-        else if (a == "--load-state") spec.load_state = fs::path(val());
+        else if (a == "--load-state") spec.load_state = utf8_path(val());
         else if (a == "--tpak1-rom") spec.tpak_rom = val();
-        else if (a == "--tpak1-save") spec.save_files["tpak1"] = val();
-        else if (a == "--tpak1-rtc") spec.save_files["tpak1.rtc"] = val();
+        else if (a == "--tpak1-save") spec.save_files["tpak1"] = utf8_path(val());
+        else if (a == "--tpak1-rtc") spec.save_files["tpak1.rtc"] = utf8_path(val());
+        else if (a == "--save") { // <region id>=<file>
+            const std::string kv = val();
+            const auto eq = kv.find('=');
+            if (eq == std::string::npos) die("--save region=file");
+            spec.save_files[kv.substr(0, eq)] = utf8_path(kv.substr(eq + 1));
+        } else if (a == "--env") spec.env.push_back(val()); // NAME=value, for the runner
         else if (a == "--gl") spec.gl = true;
         else if (a == "--strict") spec.strict = true;
         else if (a == "--no-seats") seat0 = false;

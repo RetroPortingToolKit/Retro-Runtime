@@ -83,6 +83,8 @@ line.
 
 - **Netplay** (rev 4: the runner binds recomp-net's `rb_driver`).
 - **The savestate envelope** and its refuse-on-mismatch rule.
-- **A Windows GL path, and Windows testing.** `LoadLibrary` is written but
-  unrun.
+- **Windows and macOS testing on real machines.** Both build and pass the
+  ctest suite in CI, and Windows also passes it under Wine. macOS loads a core
+  from a private copy, because it has no `/proc/self/fd`
+  (`LINK_TRANSPORTS.md` §7). No one has run a real core on either OS yet.
 - **`OWNS_LOOP` cores** (`frame_boundary`). Only `RUN_FRAME` cores are driven.

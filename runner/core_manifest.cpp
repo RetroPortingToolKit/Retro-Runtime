@@ -71,7 +71,9 @@ std::string join(const std::vector<std::string>& v) {
 } // namespace
 
 fs::path manifest_path_for(const fs::path& library) {
-    return library.parent_path() / (library.stem().string() + ".rcore.toml");
+    fs::path name = library.stem();
+    name += ".rcore.toml";
+    return library.parent_path() / name;
 }
 
 bool read_manifest(const fs::path& path, CoreManifest& out, std::string* error) {

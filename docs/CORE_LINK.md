@@ -3,13 +3,13 @@
 How the hub runs a core in its own window. The core runs in
 `retro-core-runner` (`CORE_RUNNER.md`), a child process; this link is how the
 two talk. The design is `HOST_LIFECYCLE.md` §4; this page is what was built.
-Code: `src/corelink/` (shared), `src/runner/runner_link.cpp` (runner side),
-`src/hub/hub_play.*` (hub side).
+Code: `corelink/` (shared, with the per-OS transport in `transport_*.cpp`),
+`runner/runner_link.cpp` (runner side), and Retro Launcher's `src/hub/hub_play.*`
+(hub side).
 
-**Status, 2026-09-25: Linux only.** It uses `memfd`, `SOCK_SEQPACKET` and
-`SCM_RIGHTS`. Windows builds exactly as before, with no runner, no link and no
-play mode. The macOS and Windows transports are designed, not built:
-`LINK_TRANSPORTS.md` (2026-09-26).
+**Status, 2026-09-26: Linux, macOS and Windows.** The transport table below is
+Linux's. macOS and Windows use the transports in `LINK_TRANSPORTS.md`; the
+protocol is the same on all three.
 
 ## Transport
 
@@ -152,4 +152,5 @@ All on `pokemonstadium_core.so` built clean from n64lle `ffa84cfc`.
 - **Savestates from the quick menu,** with the envelope.
 - **Options UI.** Options come only from `--opt`.
 - **Accessory binding UI, per-seat remapping, hot-plug.**
-- **The Windows transport.**
+- **The hub on macOS and Windows.** Retro Launcher builds `hub_play.cpp` only on
+  Linux.

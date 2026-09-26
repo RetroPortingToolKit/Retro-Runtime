@@ -1,6 +1,12 @@
 # Link transports: Linux, macOS, Windows
 
-**Status: design approved by Alex, 2026-09-26. Being built.**
+**Status: approved by Alex and built, 2026-09-26.** Proof so far, following §9:
+- **Linux:** the refactor onto `transport.hpp` is byte-identical to the
+  2026-09-25 link. That covers 4 scenarios on `pokemonstadium_core.so`, all 8
+  artifacts of each, `runner.log` and the Transfer Pak save included.
+- **Windows:** the whole ctest suite passes under Wine (a MinGW build),
+  including the crash test.
+- **Windows (MSVC) and macOS:** CI results are pending.
 
 `CORE_LINK.md` describes the link as it was built on Linux. This page is how
 the same link runs on macOS and Windows. The approach is to change only what

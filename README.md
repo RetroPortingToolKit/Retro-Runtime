@@ -24,8 +24,8 @@ ctest --test-dir build
 
 - SDL3 is optional: the runner uses it only to lend a core a GL context
   (`--gl`).
-- The link and the runner are **Linux only** until the link has a Windows
-  transport. `retro_rcore` and `retro_core_support` build everywhere.
+- Linux, macOS and Windows. The link's transport differs per OS
+  (`docs/LINK_TRANSPORTS.md`); the protocol above it does not.
 
 A host pulls this in with `add_subdirectory()` and links `retro_rcore`,
 `retro_core_support` and `retro_corelink`. A host that already found SDL3 can
@@ -40,8 +40,7 @@ plus a `runtime-manifest.json` that hosts poll to update the runner:
 https://github.com/RetroPortingToolKit/Retro-Runtime/releases/latest/download/runtime-manifest.json
 ```
 
-Linux x86_64 and arm64 today. Windows and macOS are listed as unavailable
-until the link has a transport there. See `docs/RELEASES.md` for the gates,
+Linux x86_64 and arm64, macOS (one universal binary) and Windows x86_64. See `docs/RELEASES.md` for the gates,
 the manifest format, and the rule a host follows to update.
 `retro-core-runner --version` reports the version, commit and contracts that
 were compiled in.

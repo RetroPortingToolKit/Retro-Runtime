@@ -8,12 +8,14 @@ release asset, so the newest one is always at
     https://github.com/<repo>/releases/latest/download/runtime-manifest.json
 
 Every entry was written by scripts/package-release.sh from the runner inside
-its own archive. This refuses to write a manifest when they disagree about the
-version, the commit or the contracts, or when an expected platform is missing:
-one release is one runtime, whatever it was built on.
+its own archive. One entry may serve several platform keys (the universal macOS
+build serves macos-arm64 and macos-x86_64). This refuses to write a manifest
+when entries disagree about the version, the commit or the contracts, when two
+serve the same key, or when an expected platform is missing: one release is one
+runtime, whatever it was built on.
 
 usage: release_manifest.py --version 0.1.0 --tag v0.1.0 --repo OWNER/NAME \
-           --expect linux-x86_64,linux-arm64 --out DIR ENTRY.json...
+           --expect linux-x86_64,...,windows-x86_64 --out DIR ENTRY.json...
 """
 
 import argparse
@@ -27,9 +29,7 @@ SCHEMA = 1
 # Platforms a host may ask for that this release cannot serve, and why. A host
 # reads the reason instead of finding the platform silently absent.
 UNAVAILABLE = {
-    "windows-x86_64": "the link has no Windows transport yet (docs/CORE_LINK.md)",
-    "macos-arm64": "the link has no macOS transport yet (docs/CORE_LINK.md)",
-    "macos-x86_64": "the link has no macOS transport yet (docs/CORE_LINK.md)",
+    "windows-arm64": "not built yet (docs/LINK_TRANSPORTS.md §8)",
 }
 
 # Fields every platform of one release must agree on.
@@ -53,9 +53,10 @@ def main() -> int:
     entries = [json.loads(pathlib.Path(p).read_text()) for p in a.entries]
     by_platform = {}
     for e in entries:
-        if e["platform"] in by_platform:
-            return refuse(f"two entries for {e['platform']}")
-        by_platform[e["platform"]] = e
+        for key in e.get("serves", [e["platform"]]):
+            if key in by_platform:
+                return refuse(f"{by_platform[key]['platform']} and {e['platform']} both serve {key}")
+            by_platform[key] = e
 
     expected = {p for p in a.expect.split(",") if p}
     if set(by_platform) != expected:
@@ -103,8 +104,8 @@ def main() -> int:
     out = pathlib.Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
     (out / "runtime-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    sums = "".join(f"{by_platform[p]['sha256']}  {by_platform[p]['archive']}\n"
-                   for p in sorted(by_platform))
+    sums = "".join(f"{e['sha256']}  {e['archive']}\n"
+                   for e in sorted(entries, key=lambda e: e["archive"]))
     (out / "SHA256SUMS").write_text(sums)
     print(json.dumps(manifest, indent=2))
     return 0

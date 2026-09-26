@@ -9,10 +9,6 @@
 #include <iterator>
 #include <vector>
 
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <unistd.h>
-
 namespace retro::runner {
 
 using namespace retro::corelink;
@@ -27,7 +23,7 @@ void copy_str(char* dst, std::size_t cap, const char* src) {
 // dir (everything) and to the hub (what it shows); input from the grant.
 class LinkSink final : public Sink {
 public:
-    LinkSink(int sock, SharedHeader* shm, const fs::path& out)
+    LinkSink(Channel& sock, SharedHeader* shm, const fs::path& out)
         : sock_(sock), shm_(shm), log_(out / "core.log"), events_(out / "events.tsv") {
         base_ = reinterpret_cast<std::uint8_t*>(shm);
     }
@@ -121,14 +117,14 @@ public:
     std::uint32_t bad_frames = 0;
 
 private:
-    int sock_;
+    Channel& sock_;
     SharedHeader* shm_;
     std::uint8_t* base_;
     std::uint32_t back_ = 2; // the triple buffer's initial back slot
     std::ofstream log_, events_;
 };
 
-int exiting(int sock, int code, const std::string& reason) {
+int exiting(Channel& sock, int code, const std::string& reason) {
     ExitingMsg m{};
     m.h.type = Msg::Exiting;
     m.code = code;
@@ -142,17 +138,20 @@ int exiting(int sock, int code, const std::string& reason) {
 
 int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const LinkArgs& a,
                   void (*lend_gl)(HostSession&)) {
-    const int sock = kSocketFd;
+    Channel sock;
+    NativeHandle shared_handle = kNoHandle;
+    std::string link_err;
+    if (!runner_endpoints(a.link_handles, sock, shared_handle, &link_err)) {
+        std::fprintf(stderr, "retro-core-runner: link: %s\n", link_err.c_str());
+        return 2;
+    }
 
     // ---- the shared region the hub created ----------------------------------
-    struct stat st{};
-    if (::fstat(kSharedFd, &st) != 0 || std::size_t(st.st_size) < shared_total_size()) {
-        return exiting(sock, 2, "link: the shared region is missing or too small");
+    SharedMemory region;
+    if (!map_shared(shared_handle, shared_total_size(), region, &link_err)) {
+        return exiting(sock, 2, "link: the shared region is missing or too small (" + link_err + ")");
     }
-    void* map = ::mmap(nullptr, shared_total_size(), PROT_READ | PROT_WRITE, MAP_SHARED,
-                       kSharedFd, 0);
-    if (map == MAP_FAILED) return exiting(sock, 2, "link: cannot map the shared region");
-    auto* shm = static_cast<SharedHeader*>(map);
+    auto* shm = static_cast<SharedHeader*>(region.data);
     if (std::memcmp(shm->magic, kMagic, sizeof kMagic) != 0) {
         return exiting(sock, 2, "link: the shared region is not a link region");
     }
@@ -214,11 +213,14 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
     }
     if (nregs > kMaxRegions) return exiting(sock, 2, "the core declared too many save regions");
 
-    // ---- save memory: one memfd per region, handed to the hub ---------------
+    // ---- save memory: one object per region, handed to the hub --------------
+    // The runner keeps its handles for the whole session: on Windows the hub
+    // duplicates them out of this process after it reads SaveRegions.
     SaveRegionsMsg sr{};
     sr.h.type = Msg::SaveRegions;
     sr.count = nregs;
-    std::vector<int> fds;
+    std::vector<SharedMemory> objects(nregs);
+    std::vector<NativeHandle> handles;
     std::vector<std::uint8_t*> memory;
     for (std::uint32_t i = 0; i < nregs; ++i) {
         const rcore_save_region& r = regs[i];
@@ -229,22 +231,20 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         d.slot = r.slot;
         d.erase_value = RCORE_HAS(&r, rcore_save_region, erase_value) ? r.erase_value : 0;
         d.size = r.size;
-        const int fd = ::memfd_create(d.id, MFD_CLOEXEC);
-        if (fd < 0 || ::ftruncate(fd, static_cast<off_t>(r.size ? r.size : 1)) != 0) {
-            return exiting(sock, 2, std::string("cannot create save memory for ") + d.id);
+        std::string err;
+        if (!create_shared(static_cast<std::size_t>(r.size), d.id, objects[i], &err)) {
+            return exiting(sock, 2, std::string("cannot create save memory for ") + d.id +
+                                        ": " + err);
         }
-        void* m = ::mmap(nullptr, r.size ? r.size : 1, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-        if (m == MAP_FAILED) return exiting(sock, 2, std::string("cannot map ") + d.id);
-        fds.push_back(fd);
-        memory.push_back(static_cast<std::uint8_t*>(m));
+        handles.push_back(objects[i].handle);
+        memory.push_back(static_cast<std::uint8_t*>(objects[i].data));
     }
-    if (!send_msg(sock, sr, fds.data(), fds.size())) return 2;
-    for (int fd : fds) ::close(fd); // the mappings stay; the hub holds its own
+    if (!send_msg(sock, sr, handles.data(), handles.size())) return 2;
 
     // The hub fills each region (erase value, then its save file) and says so.
     std::vector<unsigned char> buf;
     for (;;) {
-        const RecvResult rr = recv_packet(sock, buf, nullptr, true);
+        const RecvResult rr = recv_packet(sock, buf, nullptr, -1);
         if (rr != RecvResult::Packet) return 0; // the hub went away before playing
         Msg t{};
         packet_type(buf, t);
@@ -277,7 +277,7 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
     // ---- one frame per grant, until Quit or the hub goes away ---------------
     int code = 0;
     for (;;) {
-        const RecvResult rr = recv_packet(sock, buf, nullptr, true);
+        const RecvResult rr = recv_packet(sock, buf, nullptr, -1);
         if (rr != RecvResult::Packet) break; // hub gone: stop quietly
         Msg t{};
         packet_type(buf, t);

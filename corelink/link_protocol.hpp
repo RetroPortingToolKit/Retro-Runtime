@@ -205,4 +205,93 @@ constexpr std::size_t kMaxMsgSize = sizeof(SaveRegionsMsg) > sizeof(LogMsg)
                                         ? sizeof(SaveRegionsMsg)
                                         : sizeof(LogMsg);
 
+// ---- the wire layout, pinned ------------------------------------------------
+//
+// The hub and the runner may be built by different compilers (Retro Launcher's
+// Windows hub is MSVC). Every byte both sides touch is laid out exactly as the
+// Linux GCC build laid it out when protocol 1.0 shipped; a compiler that
+// disagrees fails here instead of corrupting a session (LINK_TRANSPORTS.md §6).
+// Measured 2026-09-26 on GCC 16 x86_64 and confirmed identical on MinGW-w64.
+// A change to any line below is a protocol major bump.
+
+static_assert(sizeof(FrameInfo) == 32 && alignof(FrameInfo) == 8, "FrameInfo");
+static_assert(offsetof(FrameInfo, width) == 0, "FrameInfo::width");
+static_assert(offsetof(FrameInfo, height) == 4, "FrameInfo::height");
+static_assert(offsetof(FrameInfo, stride) == 8, "FrameInfo::stride");
+static_assert(offsetof(FrameInfo, pixel_format) == 12, "FrameInfo::pixel_format");
+static_assert(offsetof(FrameInfo, aspect_num) == 16, "FrameInfo::aspect_num");
+static_assert(offsetof(FrameInfo, aspect_den) == 20, "FrameInfo::aspect_den");
+static_assert(offsetof(FrameInfo, frame_number) == 24, "FrameInfo::frame_number");
+static_assert(sizeof(SharedHeader) == 192 && alignof(SharedHeader) == 8, "SharedHeader");
+static_assert(offsetof(SharedHeader, magic) == 0, "SharedHeader::magic");
+static_assert(offsetof(SharedHeader, protocol_major) == 8, "SharedHeader::protocol_major");
+static_assert(offsetof(SharedHeader, protocol_minor) == 12, "SharedHeader::protocol_minor");
+static_assert(offsetof(SharedHeader, header_size) == 16, "SharedHeader::header_size");
+static_assert(offsetof(SharedHeader, total_size) == 24, "SharedHeader::total_size");
+static_assert(offsetof(SharedHeader, frames_offset) == 32, "SharedHeader::frames_offset");
+static_assert(offsetof(SharedHeader, audio_offset) == 40, "SharedHeader::audio_offset");
+static_assert(offsetof(SharedHeader, middle) == 48, "SharedHeader::middle");
+static_assert(offsetof(SharedHeader, slot) == 56, "SharedHeader::slot");
+static_assert(offsetof(SharedHeader, audio_write) == 152, "SharedHeader::audio_write");
+static_assert(offsetof(SharedHeader, audio_read) == 160, "SharedHeader::audio_read");
+static_assert(offsetof(SharedHeader, audio_rate) == 168, "SharedHeader::audio_rate");
+static_assert(offsetof(SharedHeader, audio_capacity) == 172, "SharedHeader::audio_capacity");
+static_assert(offsetof(SharedHeader, audio_dropped) == 176, "SharedHeader::audio_dropped");
+static_assert(offsetof(SharedHeader, frame_rate) == 184, "SharedHeader::frame_rate");
+static_assert(sizeof(MsgHeader) == 8 && alignof(MsgHeader) == 4, "MsgHeader");
+static_assert(offsetof(MsgHeader, type) == 0, "MsgHeader::type");
+static_assert(offsetof(MsgHeader, size) == 4, "MsgHeader::size");
+static_assert(sizeof(HelloMsg) == 296 && alignof(HelloMsg) == 8, "HelloMsg");
+static_assert(offsetof(HelloMsg, h) == 0, "HelloMsg::h");
+static_assert(offsetof(HelloMsg, protocol_major) == 8, "HelloMsg::protocol_major");
+static_assert(offsetof(HelloMsg, protocol_minor) == 12, "HelloMsg::protocol_minor");
+static_assert(offsetof(HelloMsg, abi_major) == 16, "HelloMsg::abi_major");
+static_assert(offsetof(HelloMsg, draft_revision) == 20, "HelloMsg::draft_revision");
+static_assert(offsetof(HelloMsg, engine_dirty) == 24, "HelloMsg::engine_dirty");
+static_assert(offsetof(HelloMsg, capabilities) == 32, "HelloMsg::capabilities");
+static_assert(offsetof(HelloMsg, sha256) == 40, "HelloMsg::sha256");
+static_assert(offsetof(HelloMsg, core_id) == 105, "HelloMsg::core_id");
+static_assert(offsetof(HelloMsg, core_version) == 168, "HelloMsg::core_version");
+static_assert(offsetof(HelloMsg, platforms) == 232, "HelloMsg::platforms");
+static_assert(sizeof(RegionDesc) == 72 && alignof(RegionDesc) == 8, "RegionDesc");
+static_assert(offsetof(RegionDesc, id) == 0, "RegionDesc::id");
+static_assert(offsetof(RegionDesc, kind) == 48, "RegionDesc::kind");
+static_assert(offsetof(RegionDesc, seat) == 52, "RegionDesc::seat");
+static_assert(offsetof(RegionDesc, slot) == 56, "RegionDesc::slot");
+static_assert(offsetof(RegionDesc, erase_value) == 60, "RegionDesc::erase_value");
+static_assert(offsetof(RegionDesc, size) == 64, "RegionDesc::size");
+static_assert(sizeof(SaveRegionsMsg) == 1168 && alignof(SaveRegionsMsg) == 8, "SaveRegionsMsg");
+static_assert(offsetof(SaveRegionsMsg, h) == 0, "SaveRegionsMsg::h");
+static_assert(offsetof(SaveRegionsMsg, count) == 8, "SaveRegionsMsg::count");
+static_assert(offsetof(SaveRegionsMsg, region) == 16, "SaveRegionsMsg::region");
+static_assert(sizeof(FrameDoneMsg) == 24 && alignof(FrameDoneMsg) == 8, "FrameDoneMsg");
+static_assert(offsetof(FrameDoneMsg, h) == 0, "FrameDoneMsg::h");
+static_assert(offsetof(FrameDoneMsg, frame_number) == 8, "FrameDoneMsg::frame_number");
+static_assert(offsetof(FrameDoneMsg, result) == 16, "FrameDoneMsg::result");
+static_assert(sizeof(LogMsg) == 1036 && alignof(LogMsg) == 4, "LogMsg");
+static_assert(offsetof(LogMsg, h) == 0, "LogMsg::h");
+static_assert(offsetof(LogMsg, level) == 8, "LogMsg::level");
+static_assert(offsetof(LogMsg, text) == 12, "LogMsg::text");
+static_assert(sizeof(EventMsg) == 544 && alignof(EventMsg) == 8, "EventMsg");
+static_assert(offsetof(EventMsg, h) == 0, "EventMsg::h");
+static_assert(offsetof(EventMsg, kind) == 8, "EventMsg::kind");
+static_assert(offsetof(EventMsg, frame_number) == 16, "EventMsg::frame_number");
+static_assert(offsetof(EventMsg, guest_address) == 24, "EventMsg::guest_address");
+static_assert(offsetof(EventMsg, detail) == 32, "EventMsg::detail");
+static_assert(sizeof(ExitingMsg) == 524 && alignof(ExitingMsg) == 4, "ExitingMsg");
+static_assert(offsetof(ExitingMsg, h) == 0, "ExitingMsg::h");
+static_assert(offsetof(ExitingMsg, code) == 8, "ExitingMsg::code");
+static_assert(offsetof(ExitingMsg, reason) == 12, "ExitingMsg::reason");
+static_assert(sizeof(SavesFilledMsg) == 232 && alignof(SavesFilledMsg) == 4, "SavesFilledMsg");
+static_assert(offsetof(SavesFilledMsg, h) == 0, "SavesFilledMsg::h");
+static_assert(offsetof(SavesFilledMsg, pads) == 8, "SavesFilledMsg::pads");
+static_assert(sizeof(GrantMsg) == 240 && alignof(GrantMsg) == 8, "GrantMsg");
+static_assert(offsetof(GrantMsg, h) == 0, "GrantMsg::h");
+static_assert(offsetof(GrantMsg, frame_number) == 8, "GrantMsg::frame_number");
+static_assert(offsetof(GrantMsg, pads) == 16, "GrantMsg::pads");
+static_assert(sizeof(EmptyMsg) == 8 && alignof(EmptyMsg) == 4, "EmptyMsg");
+static_assert(offsetof(EmptyMsg, h) == 0, "EmptyMsg::h");
+static_assert(sizeof(rcore_pad) == 28 && alignof(rcore_pad) == 4, "rcore_pad");
+
+
 } // namespace retro::corelink

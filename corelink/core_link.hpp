@@ -6,6 +6,7 @@
 // frontend and the link test tool both drive a session through this class.
 
 #include "link_protocol.hpp"
+#include "transport.hpp"
 
 #include <cstdint>
 #include <filesystem>
@@ -118,24 +119,25 @@ public:
     void stop(int grace_ms = 3000);
 
 private:
-    void handle_packet(const std::vector<unsigned char>& buf, std::vector<int>& fds);
+    void handle_packet(const std::vector<unsigned char>& buf, std::vector<NativeHandle>& handles);
     void on_ended(int code);
-    void reap(bool block);
+    void reap(int timeout_ms);
 
     struct Region {
         std::string id;
         std::uint8_t* data = nullptr;
         std::size_t size = 0;
         std::optional<fs::path> file;
+        SharedMemory memory;
     };
 
     LaunchSpec spec_;
     LinkState state_ = LinkState::Idle;
     CoreIdentity identity_;
-    int sock_ = -1;
-    int shm_fd_ = -1;
+    Channel channel_;
+    SharedMemory region_;
     SharedHeader* shm_ = nullptr;
-    int pid_ = -1;
+    RunnerProcess process_;
     std::vector<Region> regions_;
     std::uint64_t granted_ = 0, done_ = 0;
     int outstanding_ = 0;

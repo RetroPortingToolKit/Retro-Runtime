@@ -32,6 +32,7 @@
 #include "link_protocol.hpp"
 #include "runner_link.hpp"
 #include "runtime_version.h"
+#include "transport.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -182,14 +183,39 @@ void* sdl_gl_proc(const char* name) {
     return reinterpret_cast<void*>(SDL_GL_GetProcAddress(name));
 }
 
-// A hidden window's GL context, current on this thread for every core call.
+// A hidden window's GL context, current on this thread for every core call --
+// but only a 4.3+ one (docs/CORE_ABI.md, ruling 1: GL_COMPUTE needs compute
+// shaders). Below that, nothing is lent, and a GL_COMPUTE core runs its
+// software path and says so. macOS OpenGL stops at 4.1, so a Mac never lends.
 void lend_gl_context(HostSession& session) {
     if (!SDL_Init(SDL_INIT_VIDEO)) die(std::string("SDL_Init: ") + SDL_GetError());
+#if defined(__APPLE__)
+    // The newest context macOS has, so the version check below reports it.
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+#endif
     SDL_Window* win =
         SDL_CreateWindow("retro-core-runner", 64, 64, SDL_WINDOW_OPENGL | SDL_WINDOW_HIDDEN);
     if (!win) die(std::string("SDL_CreateWindow: ") + SDL_GetError());
     SDL_GLContext ctx = SDL_GL_CreateContext(win);
     if (!ctx || !SDL_GL_MakeCurrent(win, ctx)) die(std::string("GL context: ") + SDL_GetError());
+    // GL_MAJOR_VERSION / GL_MINOR_VERSION exist from 3.0; an older context
+    // leaves them untouched, so 0.0 reads as "too old".
+    using get_int_fn = void (*)(unsigned, int*);
+    auto get_int = reinterpret_cast<get_int_fn>(SDL_GL_GetProcAddress("glGetIntegerv"));
+    int major = 0, minor = 0;
+    if (get_int) {
+        get_int(0x821B, &major);
+        get_int(0x821C, &minor);
+    }
+    if (major < 4 || (major == 4 && minor < 3)) {
+        SDL_GL_DestroyContext(ctx);
+        SDL_DestroyWindow(win);
+        std::printf("gl: the context is %d.%d, below 4.3: lending none, so a GL_COMPUTE core "
+                    "runs its software path\n", major, minor);
+        return;
+    }
     session.lend_gl(sdl_gl_proc);
     std::printf("gl: lent a context (hidden SDL window, driver %s)\n", SDL_GetCurrentVideoDriver());
 }
@@ -216,21 +242,24 @@ void print_version() {
 } // namespace
 
 int main(int argc, char** argv) {
+    // UTF-8 on every OS: Windows' argv is the ANSI code page (transport.hpp).
+    const std::vector<std::string> args = retro::corelink::utf8_args(argc, argv);
+    argc = static_cast<int>(args.size());
     std::string core_path, rom, title_dir = ".";
     fs::path out = ".";
     std::uint64_t frames = 60;
     std::optional<fs::path> load_state, tpak_save, tpak_rtc;
-    std::string tpak_rom;
+    std::string tpak_rom, link_handles;
     bool gl = false, strict = false, seat0 = true, list_options = false, link = false;
     std::optional<std::uint64_t> replay_at;
     std::map<std::string, std::string> overrides;
     std::vector<std::pair<std::uint64_t, std::uint32_t>> script;
 
     for (int i = 1; i < argc; ++i) {
-        const std::string a = argv[i];
+        const std::string a = args[i];
         auto val = [&]() -> std::string {
             if (i + 1 >= argc) die(a + " needs a value");
-            return argv[++i];
+            return args[++i];
         };
         auto num = [&](const std::string& v) -> std::uint64_t {
             char* end = nullptr;
@@ -244,14 +273,15 @@ int main(int argc, char** argv) {
         } else if (a == "--core") core_path = val();
         else if (a == "--rom") rom = val();
         else if (a == "--title-dir") title_dir = val();
-        else if (a == "--out") out = val();
+        else if (a == "--out") out = retro::corelink::utf8_path(val());
         else if (a == "--frames") frames = num(val());
-        else if (a == "--load-state") load_state = fs::path(val());
+        else if (a == "--load-state") load_state = retro::corelink::utf8_path(val());
         else if (a == "--tpak1-rom") tpak_rom = val();
-        else if (a == "--tpak1-save") tpak_save = fs::path(val());
-        else if (a == "--tpak1-rtc") tpak_rtc = fs::path(val());
+        else if (a == "--tpak1-save") tpak_save = retro::corelink::utf8_path(val());
+        else if (a == "--tpak1-rtc") tpak_rtc = retro::corelink::utf8_path(val());
         else if (a == "--gl") gl = true;
         else if (a == "--link") link = true;
+        else if (a == "--link-handles") link_handles = val();
         else if (a == "--strict") strict = true;
         else if (a == "--no-seats") seat0 = false;
         else if (a == "--list-options") list_options = true;
@@ -287,7 +317,7 @@ int main(int argc, char** argv) {
     // ---- load: hash the file that is loaded, then the one symbol ---------
     LoadedCore core;
     std::string err;
-    if (!load_core(core_path, core, &err)) die(err);
+    if (!load_core(retro::corelink::utf8_path(core_path), core, &err)) die(err);
     const rcore_core_info& info = *core.info;
     std::printf("core: %s %s platforms=%s capabilities=0x%llx state_compat_id=%s\n",
                 info.core_id, info.core_version, info.platforms,
@@ -329,6 +359,7 @@ int main(int argc, char** argv) {
         la.overrides = overrides;
         la.load_state = load_state;
         la.tpak_rom = tpak_rom;
+        la.link_handles = link_handles;
         std::fflush(stdout);
         return run_link_mode(core, manifest, la, lend);
     }
