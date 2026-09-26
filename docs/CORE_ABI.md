@@ -149,8 +149,14 @@ generated_utc   = "2026-09-24T00:00:00Z"
 - **Per-title versus generic cores.** A per-title core carries `[title]`, and
   the host offers it only for that title and those ROMs. A generic core
   (`game_package` capability) omits `[title]` and receives
-  `rcore_load_params.package_path`. n64lle's first core is per-title
+  `rcore_load_params.package_path`: the path of the title's generated-code
+  library (`<slug>_game.so`), with `title_dir` the directory holding its
+  `game.toml`. n64lle's first core is per-title
   (`pokemonstadium_core.so`).
+- **The runner enforces the split** (`CORE_RUNNER.md`, `--package`): a
+  `game_package` core runs only with `--package`, any other core refuses one,
+  and a `game_package` core whose sidecar carries `[title]` fails the manifest
+  check. The runner logs the package's SHA-256 beside the core's.
 - **Dirty builds are allowed and visible.** `engine_dirty = true` shows in the
   UI and keeps the core out of public netplay lobbies.
 
@@ -278,7 +284,7 @@ host format, not ABI, so it can evolve without touching cores.
 | core id | `rcore_core_info.core_id` |
 | **core file SHA-256** | host-computed over the library the runner actually loaded (hash the opened file, not a path looked up again) |
 | state compat id | `rcore_core_info.state_compat_id`, or absent |
-| game package SHA-256 | host, when `CAP_GAME_PACKAGE` |
+| game package SHA-256 | host, when `CAP_GAME_PACKAGE` (the runner computes it for `--package`; `CORE_RUNNER.md`) |
 | content SHA-256 | host-verified ROM / disc |
 | accessory bindings | seat, slot, type id, content SHA-256 — every binding, not only the `NETPLAY` ones |
 | simulation options | key and value of every `RCORE_OPT_FLAG_NETPLAY` option |

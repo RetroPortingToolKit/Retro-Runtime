@@ -56,6 +56,7 @@ unreleased development counter, which had reached 3.
 hub                                    runner
  spawn (argv = headless flags + --link)
                            <-- Hello        identity: sha256, id, version, caps
+                                            (the core's; not the package's)
                                             set options, lend GL, init, load
                            <-- SaveRegions  one memfd per region
  map, fill (erase value, then file)
@@ -68,6 +69,13 @@ hub                                    runner
  Quit -->                                   unload, deinit, exit 0
 ```
 
+- **A game package rides in argv.** `LaunchSpec::package` becomes
+  `--package <path>` (a `game_package` core needs it; any other refuses it,
+  exit 2 before `Hello`). Hello is unchanged in 1.0 and carries only the
+  core's hash; the runner prints the package's hash to `runner.log`, and a
+  hub that needs it as data hashes the file it passed. `retro-core-link-test
+  --package` drives it, and `probe_runner` reads `game_package` from
+  `--version` (`RunnerVersion::game_package`, 0 for a runner from before it).
 - **Input rides inside each Grant**, so the contract's "identical within one
   frame" holds by construction.
 - **SavesFilled carries the seats as they stand before frame 1.** A core may

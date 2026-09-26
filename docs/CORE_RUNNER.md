@@ -18,8 +18,24 @@ This page covers what exists and how it is checked.
    library's own `rcore_core_info`: ABI major, id, version, library file name,
    platforms, capabilities, `state_compat_id`. A missing sidecar, an unknown
    key or section, or any disagreement is a refusal that names both values.
+   A `game_package` core whose sidecar carries `[title]` is refused too
+   (`CORE_ABI.md`, "Per-title versus generic cores").
    The draft revision is reported, not enforced: the append-only rule and
    `struct_size` handle an older core.
+
+   **The game package** (`--package <library>`, 2026-09-26). A core
+   declaring `game_package` is generic: its title's generated code is a
+   separate library, passed as `rcore_load_params.package_path`. The rule,
+   headless and `--link` alike, all exit 2 before `init`:
+   - a `game_package` core without `--package` is refused;
+   - `--package` for a core without `game_package` is refused;
+   - a `--package` that is not a readable file is refused.
+
+   The runner hashes the package (SHA-256) and prints
+   `package: <path> sha256 <hex>` after the core's `identity` line, so over
+   the link it lands in `runner.log`. The core opens the package itself, so
+   this hash names the file as the runner read it, not a handle the core
+   loaded through (unlike the core's own identity).
 3. **Hosts the session** (`src/runner/host_session.*`), the part every mode
    shares:
    - declared options with their defaults, overrides on top; an undeclared
@@ -33,12 +49,13 @@ This page covers what exists and how it is checked.
    the hub's shared memory once the link exists.
 4. **Headless mode** runs N frames and writes what n64lle's parity gate
    compares. Its command line and outputs match n64lle's `rcore_probe`
-   (`--core --rom --title-dir --out --frames --load-state --tpak1-rom
+   (`--core --package --rom --title-dir --out --frames --load-state --tpak1-rom
    --tpak1-save --tpak1-rtc --gl --strict --no-seats --replay-at --opt
    --input-script --list-options`).
 
 `--version` prints the release version, commit, link protocol and rcore ABI
-compiled in, and exits 0 (`RELEASES.md`).
+compiled in, whether `--gl` is available, and `game_package 1` (this runner
+takes `--package`), and exits 0 (`RELEASES.md`).
 
 Exit codes:
 
@@ -46,7 +63,7 @@ Exit codes:
 |---|---|
 | 0 | ok |
 | 1 | a frame failed, or the core reported a FAULT |
-| 2 | refused before the core ran: arguments, load, ABI or manifest |
+| 2 | refused before the core ran: arguments, load, ABI, manifest or game package |
 | 3 | the core broke the contract: an undeclared option key |
 
 ## How it is checked
@@ -78,6 +95,13 @@ addresses were truncated in `events.tsv`.
 Also checked: a manifest with a capability removed, a changed id, an unknown
 key, and no manifest at all are each refused with exit 2, naming the field or
 line.
+
+`--package` (2026-09-26) is checked by ctest only, on `fake_pkg_core` (the
+fake core built with `game_package`, sidecar without `[title]`) and
+`tests/fake_package.txt`: it runs headless and over the link with the
+package's hash logged, and each refusal above exits 2
+(`runner_package_*`, `tests/package_test.cmake`). No real generic core has
+run through it yet.
 
 ## Not built yet
 
