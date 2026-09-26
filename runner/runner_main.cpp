@@ -18,6 +18,10 @@
 //   events.tsv      every report(): BRIDGE / DISPATCH_MISS / FAULT
 //   core.log        every log() line
 //
+// --version prints what this binary is, one "key value" per line: the release
+// version and commit compiled in, the link protocol and rcore ABI it speaks,
+// and whether --gl is available. Release packaging and hosts read it back.
+//
 // Exit codes: 0 ok; 1 a frame failed or the core reported a FAULT; 2 a
 // refusal before the core ran (bad arguments, load, ABI, manifest); 3 the
 // core broke the contract (an undeclared option key).
@@ -25,7 +29,9 @@
 #include "core_library.hpp"
 #include "core_manifest.hpp"
 #include "host_session.hpp"
+#include "link_protocol.hpp"
 #include "runner_link.hpp"
+#include "runtime_version.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -189,6 +195,24 @@ void lend_gl_context(HostSession& session) {
 }
 #endif
 
+void print_version() {
+#if defined(RETRO_RUNNER_HAVE_SDL3)
+    const int gl = 1;
+#else
+    const int gl = 0;
+#endif
+    std::printf("retro-core-runner %s\n"
+                "version %s\n"
+                "commit %s\n"
+                "link_protocol %u.%u\n"
+                "rcore_abi_major %u\n"
+                "rcore_draft_revision %u\n"
+                "gl %d\n",
+                RETRO_RUNTIME_VERSION, RETRO_RUNTIME_VERSION, RETRO_RUNTIME_COMMIT,
+                retro::corelink::kProtocolMajor, retro::corelink::kProtocolMinor,
+                RCORE_ABI_MAJOR, RCORE_DRAFT_REVISION, gl);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -214,7 +238,10 @@ int main(int argc, char** argv) {
             if (v.empty() || *end) die(a + ": not a number: " + v);
             return n;
         };
-        if (a == "--core") core_path = val();
+        if (a == "--version") {
+            print_version();
+            return 0;
+        } else if (a == "--core") core_path = val();
         else if (a == "--rom") rom = val();
         else if (a == "--title-dir") title_dir = val();
         else if (a == "--out") out = val();

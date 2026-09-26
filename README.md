@@ -12,7 +12,7 @@ title's core.
 | `corelink/` | The host ↔ runner link: its protocol, and `retro_corelink`, the client a host embeds. |
 | `runner/` | `retro-core-runner`, the child process that loads a core and runs it: headless, or linked to a host. Also `retro_core_support`, the sidecar-manifest reader and core loader hosts use. |
 | `tests/rcore_fake_core.c` | The smallest core, for tests. |
-| `docs/` | `HOST_LIFECYCLE.md` (the design), `CORE_ABI.md` (the contract), `CORE_LINK.md` (the link), `CORE_RUNNER.md` (the runner). |
+| `docs/` | `HOST_LIFECYCLE.md` (the design), `CORE_ABI.md` (the contract), `CORE_LINK.md` (the link), `CORE_RUNNER.md` (the runner), `RELEASES.md` (releases and runner updates). |
 
 ## Build
 
@@ -30,6 +30,21 @@ ctest --test-dir build
 A host pulls this in with `add_subdirectory()` and links `retro_rcore`,
 `retro_core_support` and `retro_corelink`. A host that already found SDL3 can
 pass `-DRETRO_RUNTIME_SDL3_TARGET=<target>`.
+
+## Releases
+
+The `release` workflow (manual) publishes `retro-core-runner` per platform,
+plus a `runtime-manifest.json` that hosts poll to update the runner:
+
+```
+https://github.com/RetroPortingToolKit/Retro-Runtime/releases/latest/download/runtime-manifest.json
+```
+
+Linux x86_64 and arm64 today. Windows and macOS are listed as unavailable
+until the link has a transport there. See `docs/RELEASES.md` for the gates,
+the manifest format, and the rule a host follows to update.
+`retro-core-runner --version` reports the version, commit and contracts that
+were compiled in.
 
 ## Versioning
 

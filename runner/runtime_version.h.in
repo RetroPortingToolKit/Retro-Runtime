@@ -1,0 +1,7 @@
+#pragma once
+
+// Written by CMake from runner/runtime_version.h.in. Do not edit the copy in
+// the build tree.
+
+#define RETRO_RUNTIME_VERSION "@RETRO_RUNTIME_VERSION@"
+#define RETRO_RUNTIME_COMMIT "@RETRO_RUNTIME_COMMIT_RESOLVED@"

@@ -1,0 +1,222 @@
+name: release
+
+# Manual only. Builds retro-core-runner for every platform it runs on, packages
+# each through scripts/package-release.sh (whose gates fail the build), merges
+# the per-platform entries into runtime-manifest.json, and publishes a GitHub
+# Release. Hosts update from
+#   https://github.com/RetroPortingToolKit/Retro-Runtime/releases/latest/download/runtime-manifest.json
+# (docs/RELEASES.md). Leave version empty to auto-bump from the newest vX.Y.Z
+# tag on this branch; untick publish for a dry run that only uploads artifacts.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semver without leading v (e.g. 0.1.0). Empty: auto-bump from the newest vX.Y.Z tag."
+        required: false
+        type: string
+        default: ""
+      bump:
+        description: "When version is empty, which component to increment"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      prerelease:
+        description: "Mark the release as a prerelease (releases/latest skips it)"
+        type: boolean
+        default: false
+      publish:
+        description: "Publish the release (off: build, check and upload artifacts only)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+env:
+  # The same SDL3 the launcher ships. Bump both deliberately, as their own change.
+  SDL_TAG: "release-3.2.16"
+  # Platforms this release must contain. Windows and macOS wait on the link's
+  # transport there (docs/CORE_LINK.md); release_manifest.py marks them
+  # unavailable, with that reason, for hosts to read.
+  PLATFORMS: "linux-x86_64,linux-arm64"
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: v
+        shell: bash
+        run: |
+          set -euo pipefail
+          RAW="$(printf '%s' "${{ inputs.version }}" | tr -d '[:space:]')"
+          BUMP="${{ inputs.bump || 'patch' }}"
+
+          if [[ -n "${RAW}" ]]; then
+            VER="${RAW#v}"
+            if [[ ! "${VER}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.+-][A-Za-z0-9.+-]*)?$ ]]; then
+              echo "::error::invalid version ${VER} (expected semver like 0.1.2)"; exit 1
+            fi
+          else
+            # Only tags on this branch's history count: the repository was split
+            # out of Retro Launcher, and the launcher's own vX.Y.Z tags must never
+            # seed the runtime's version.
+            LATEST="$(git tag --merged HEAD -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1 || true)"
+            if [[ -z "${LATEST}" ]]; then
+              # First release: the version CMakeLists.txt declares, unbumped.
+              VER="$(sed -n 's/^project(RetroRuntime VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
+              [[ -n "${VER}" ]] || { echo "::error::no project VERSION in CMakeLists.txt"; exit 1; }
+              echo "No release tags yet: first release is CMakeLists.txt's ${VER}"
+            else
+              BASE="${LATEST#v}"; BASE="${BASE%%[-+]*}"
+              IFS=. read -r ma mi pa <<<"${BASE}"
+              case "${BUMP}" in
+                major) ma=$((ma + 1)); mi=0; pa=0 ;;
+                minor) mi=$((mi + 1)); pa=0 ;;
+                patch) pa=$((pa + 1)) ;;
+              esac
+              VER="${ma}.${mi}.${pa}"
+              echo "Auto-bumped ${BUMP}: ${LATEST} -> ${VER}"
+            fi
+          fi
+
+          TAG="v${VER}"
+          if git ls-remote --tags origin "refs/tags/${TAG}" | grep -q .; then
+            echo "::error::tag ${TAG} already exists -- bump again or pass an explicit version"; exit 1
+          fi
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          # 22.04 sets the glibc floor (the manifest records the exact one).
+          - platform: linux-x86_64
+            runner: ubuntu-22.04
+          - platform: linux-arm64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain and SDL3 build dependencies
+        run: |
+          # Drop the Microsoft apt sources nothing here comes from: their CDN
+          # intermittently 403s the runner egress and fails apt-get update.
+          sudo rm -f /etc/apt/sources.list.d/*microsoft* /etc/apt/sources.list.d/*azure-cli* || true
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build pkg-config binutils \
+            libgl1-mesa-dev libegl1-mesa-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev \
+            libxi-dev libxss-dev libxtst-dev libwayland-dev wayland-protocols \
+            libxkbcommon-dev libdecor-0-dev libdrm-dev libgbm-dev
+
+      - name: Cache SDL3
+        id: sdl-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/sdl3
+          key: sdl3-static-${{ env.SDL_TAG }}-${{ matrix.runner }}-v1
+
+      - name: Build SDL3 (static)
+        if: steps.sdl-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "${SDL_TAG}" https://github.com/libsdl-org/SDL.git "$RUNNER_TEMP/SDL"
+          cmake -S "$RUNNER_TEMP/SDL" -B "$RUNNER_TEMP/SDL/build" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DSDL_SHARED=OFF -DSDL_STATIC=ON \
+            -DSDL_TEST_LIBRARY=OFF -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF \
+            "-DCMAKE_INSTALL_PREFIX=$HOME/sdl3"
+          cmake --build "$RUNNER_TEMP/SDL/build"
+          cmake --install "$RUNNER_TEMP/SDL/build"
+
+      - name: Package
+        run: |
+          scripts/package-release.sh \
+            --version "${{ needs.version.outputs.version }}" \
+            --platform "${{ matrix.platform }}" \
+            --commit "${GITHUB_SHA}" \
+            --sdl3-prefix "$HOME/sdl3" \
+            --out dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: runtime-*
+          path: dist
+          merge-multiple: true
+
+      - name: Manifest
+        run: |
+          python3 scripts/release_manifest.py \
+            --version "${{ needs.version.outputs.version }}" \
+            --tag "${{ needs.version.outputs.tag }}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --expect "${PLATFORMS}" \
+            --out dist \
+            dist/retro-runtime-*.json
+          # Every archive must still match the hash its build recorded.
+          (cd dist && sha256sum -c SHA256SUMS)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-manifest
+          path: |
+            dist/runtime-manifest.json
+            dist/SHA256SUMS
+
+      - name: Publish
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.version.outputs.tag }}"
+          VER="${{ needs.version.outputs.version }}"
+          M=dist/runtime-manifest.json
+          {
+            echo "retro-core-runner ${VER}, built from ${GITHUB_SHA}."
+            echo
+            echo "| Contract | Version |"
+            echo "|---|---|"
+            echo "| Link protocol | $(jq -r '"\(.link_protocol.major).\(.link_protocol.minor)"' "$M") |"
+            echo "| rcore ABI | major $(jq -r .rcore_abi.major "$M"), draft revision $(jq -r .rcore_abi.draft_revision "$M") |"
+            echo
+            echo "| Platform | Archive | Requires |"
+            echo "|---|---|---|"
+            jq -r '.platforms | to_entries[] |
+                   if .value.unavailable then "| \(.key) | not available: \(.value.unavailable) | |"
+                   else "| \(.key) | `\(.value.archive)` | glibc >= \(.value.requires.glibc) |" end' "$M"
+            echo
+            echo "Hosts update from \`runtime-manifest.json\` (docs/RELEASES.md)."
+            echo
+            echo '```'
+            cat dist/SHA256SUMS
+            echo '```'
+          } > notes.md
+          flags=()
+          [[ "${{ inputs.prerelease }}" == "true" ]] && flags+=(--prerelease)
+          gh release create "${TAG}" --target "${GITHUB_SHA}" \
+            --title "Retro-Runtime ${VER}" --notes-file notes.md "${flags[@]}" \
+            dist/retro-runtime-*.tar.gz dist/retro-runtime-*.tar.gz.sha256 \
+            dist/runtime-manifest.json dist/SHA256SUMS

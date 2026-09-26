@@ -37,6 +37,9 @@ This page covers what exists and how it is checked.
    --tpak1-save --tpak1-rtc --gl --strict --no-seats --replay-at --opt
    --input-script --list-options`).
 
+`--version` prints the release version, commit, link protocol and rcore ABI
+compiled in, and exits 0 (`RELEASES.md`).
+
 Exit codes:
 
 | Code | Meaning |

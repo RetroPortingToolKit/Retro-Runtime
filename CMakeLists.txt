@@ -26,6 +26,28 @@ option(RETRO_RUNTIME_TOOLS "Build retro-core-runner, the link test and the fake 
 # looks for SDL3 itself. SDL3 is only used to lend a core a GL context.
 set(RETRO_RUNTIME_SDL3_TARGET "" CACHE STRING "SDL3 target to link the runner against")
 
+# The version is compiled in (retro-core-runner --version), so a copy that has
+# left its archive still says what it is. Releases pass the tag's version;
+# anything else is "dev", never a stale number.
+set(RETRO_RUNTIME_VERSION "dev" CACHE STRING "Version compiled into retro-core-runner")
+set(RETRO_RUNTIME_COMMIT "" CACHE STRING "Commit compiled into retro-core-runner (default: git HEAD)")
+set(_retro_commit "${RETRO_RUNTIME_COMMIT}")
+if(NOT _retro_commit)
+    find_package(Git QUIET)
+    if(GIT_FOUND)
+        execute_process(COMMAND ${GIT_EXECUTABLE} rev-parse HEAD
+                        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                        OUTPUT_VARIABLE _retro_commit OUTPUT_STRIP_TRAILING_WHITESPACE
+                        ERROR_QUIET)
+    endif()
+endif()
+if(NOT _retro_commit)
+    set(_retro_commit "unknown")
+endif()
+set(RETRO_RUNTIME_COMMIT_RESOLVED "${_retro_commit}")
+configure_file(runner/runtime_version.h.in
+               ${CMAKE_CURRENT_BINARY_DIR}/generated/runtime_version.h @ONLY)
+
 add_library(retro_rcore INTERFACE)
 target_include_directories(retro_rcore INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
@@ -66,6 +88,7 @@ if(UNIX AND NOT APPLE)
             runner/host_session.cpp
         )
         target_link_libraries(retro-core-runner PRIVATE retro_core_support retro_corelink)
+        target_include_directories(retro-core-runner PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
         if(_sdl)
             target_link_libraries(retro-core-runner PRIVATE ${_sdl})
             target_compile_definitions(retro-core-runner PRIVATE RETRO_RUNNER_HAVE_SDL3=1)
@@ -95,6 +118,10 @@ if(UNIX AND NOT APPLE)
                     --out ${CMAKE_CURRENT_BINARY_DIR}/test-headless)
         set_tests_properties(runner_headless_fake_core PROPERTIES
             PASS_REGULAR_EXPRESSION "frame rate 50/1")
+        # --version: what release packaging and hosts read back from the binary.
+        add_test(NAME runner_version COMMAND retro-core-runner --version)
+        set_tests_properties(runner_version PROPERTIES PASS_REGULAR_EXPRESSION
+            "version ${RETRO_RUNTIME_VERSION}\ncommit [^\n]+\nlink_protocol [0-9]+\\.[0-9]+\n")
         # Link: the same, driven through retro_corelink the way a host does.
         add_test(NAME link_fake_core
             COMMAND retro-core-link-test --runner $<TARGET_FILE:retro-core-runner>
