@@ -134,6 +134,11 @@ netplay-compatible by construction.
 One shared region per session, created by the host and inherited by the runner
 (a `memfd` on Linux, a named file mapping on Windows).
 
+> **Superseded, 2026-09-26** (`LINK_TRANSPORTS.md` §2): on Windows it is an
+> *unnamed* mapping inherited through an explicit handle list. A named one
+> would put an entry in a global namespace that another process could open.
+> On macOS it is `shm_open`, unlinked at once.
+
 | Block | Writer → reader | Contents |
 |---|---|---|
 | Control | both | protocol version, state, heartbeat counters, pause / grant, unload request |

@@ -8,7 +8,8 @@ Code: `src/corelink/` (shared), `src/runner/runner_link.cpp` (runner side),
 
 **Status, 2026-09-25: Linux only.** It uses `memfd`, `SOCK_SEQPACKET` and
 `SCM_RIGHTS`. Windows builds exactly as before, with no runner, no link and no
-play mode.
+play mode. The macOS and Windows transports are designed, not built:
+`LINK_TRANSPORTS.md` (2026-09-26).
 
 ## Transport
 
@@ -36,6 +37,15 @@ The runner is released and updated separately from the hosts that start it
   in the shared header and the runner states its own in Hello. The session
   speaks the lower of the two, and neither side sends anything the other's
   minor does not know.
+
+**Known defect (2026-09-26): the minor rule is not implemented.**
+- `as_msg` accepts only a packet of exactly `sizeof(M)`, and every sender
+  sends `sizeof(M)` whatever the session's minor.
+- So a field appended in a minor release would make an older peer silently
+  drop that whole message.
+- Before the first minor bump, either senders must size messages by the
+  session's minor, or `as_msg` must accept a longer packet and ignore the tail
+  (`LINK_TRANSPORTS.md` §10).
 
 **1.0** (2026-09-25) is the layout described on this page. It resets the
 unreleased development counter, which had reached 3.
