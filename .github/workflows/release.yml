@@ -95,7 +95,8 @@ jobs:
   build:
     needs: version
     strategy:
-      fail-fast: true
+      # Every platform reports; the publish job still needs all of them.
+      fail-fast: false
       matrix:
         include:
           # 22.04 sets the glibc floor (the manifest records the exact one).

@@ -157,10 +157,11 @@ chmod 0755 "${STAGE}/${EXE}"
 cp "${ROOT}/LICENSE" "${STAGE}/LICENSE"
 files=("${EXE}" LICENSE)
 if [[ "${OS}" != macos ]]; then
-  [[ -f "${SDL3_PREFIX}/share/licenses/SDL3/LICENSE.txt" ]] ||
-    die "SDL3's LICENSE.txt not found under ${SDL3_PREFIX}"
+  # share/licenses/SDL3/ on Unix; licenses/SDL3/ from an MSVC build.
+  SDL3_LICENSE="$(find "${SDL3_PREFIX}" -path '*licenses/SDL3/LICENSE.txt' -print -quit)"
+  [[ -n "${SDL3_LICENSE}" ]] || die "SDL3's licenses/SDL3/LICENSE.txt not found under ${SDL3_PREFIX}"
   mkdir -p "${STAGE}/licenses"
-  cp "${SDL3_PREFIX}/share/licenses/SDL3/LICENSE.txt" "${STAGE}/licenses/SDL3.txt"
+  cp "${SDL3_LICENSE}" "${STAGE}/licenses/SDL3.txt"
   files+=(licenses/SDL3.txt)
 fi
 expected_files="$(printf '%s\n' "${files[@]}" | LC_ALL=C sort)"
