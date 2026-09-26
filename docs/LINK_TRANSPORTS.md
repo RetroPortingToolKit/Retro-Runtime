@@ -6,7 +6,14 @@
   artifacts of each, `runner.log` and the Transfer Pak save included.
 - **Windows:** the whole ctest suite passes under Wine (a MinGW build),
   including the crash test.
-- **Windows (MSVC) and macOS:** CI results are pending.
+- **Windows (MSVC) and macOS 14:** the whole ctest suite passes in CI
+  (run 36218382611), crash test included. The 78 layout `static_assert`s hold
+  under MSVC.
+- **Still unproven:** fds landing on the right message when that message is
+  split across several reads on macOS (§3). `SaveRegions` is about 1.2 KiB and
+  arrives in one read, so no test splits it yet.
+- **Not tested at all yet:** a real core on macOS or Windows; the Windows job
+  object ending a runner stuck in `run_frame` when the hub is killed.
 
 `CORE_LINK.md` describes the link as it was built on Linux. This page is how
 the same link runs on macOS and Windows. The approach is to change only what
