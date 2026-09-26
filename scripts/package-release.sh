@@ -123,7 +123,9 @@ case "${OS}" in
     allowed='^(/usr/lib/libSystem\.B\.dylib|/usr/lib/libc\+\+\.1\.dylib|/System/Library/Frameworks/.*)$'
     while read -r lib; do
       [[ "${lib}" =~ ${allowed} ]] || bad+=" ${lib}"
-    done < <(otool -L "${RUNNER}" | tail -n +2 | awk '{print $1}' | sort -u)
+    # Dependencies are the indented lines; a universal binary also prints one
+    # unindented "<path> (architecture ...):" header per slice.
+    done < <(otool -L "${RUNNER}" | grep '^[[:space:]]' | awk '{print $1}' | sort -u)
     archs="$(lipo -archs "${RUNNER}")"
     [[ " ${archs} " == *" arm64 "* && " ${archs} " == *" x86_64 "* ]] ||
       die "retro-core-runner is not universal (slices: ${archs})"
