@@ -23,6 +23,9 @@ struct LaunchSpec {
     fs::path runner;       // the retro-core-runner binary
     fs::path core;         // <title>_core.so, its .rcore.toml beside it
     std::string rom;
+    // A GAME_PACKAGE core's package (the title's generated-code library):
+    // argv --package. Empty for any other core; the runner refuses a mismatch.
+    std::string package;
     fs::path title_dir;
     fs::path session_dir;  // runner.log, core.log, events.tsv, the core's cache
     bool gl = true;

@@ -50,6 +50,10 @@ bool CoreLink::start(const LaunchSpec& spec, std::string* error) {
             "--rom", spec_.rom,
             "--title-dir", path_utf8(spec_.title_dir),
             "--out", path_utf8(spec_.session_dir)};
+    if (!spec_.package.empty()) {
+        args.push_back("--package");
+        args.push_back(spec_.package);
+    }
     if (spec_.gl) args.push_back("--gl");
     if (spec_.strict) args.push_back("--strict");
     for (const auto& [k, v] : spec_.options) {

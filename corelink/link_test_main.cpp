@@ -4,7 +4,8 @@
 // n64lle's rcore_probe on the same core and scenario (docs/CORE_LINK.md).
 //
 // Same flags as headless mode (a subset: no --replay-at, which needs the
-// savestate envelope), plus --runner <path to retro-core-runner>.
+// savestate envelope; --package included), plus --runner <path to
+// retro-core-runner>.
 // Outputs in --out: core.log, events.tsv and state_hash.tsv come from the
 // runner's session dir, which is --out; shot.ppm is the last picture taken
 // from shared memory; summary.txt is grepped from core.log.
@@ -75,13 +76,15 @@ int main(int argc, char** argv) {
             RunnerVersion v;
             std::string err;
             if (!probe_runner(utf8_path(val()), v, &err)) die(err);
-            std::printf("probe: version %s, link %u.%u, rcore ABI %u, %s\n", v.version.c_str(),
-                        v.link_major, v.link_minor, v.abi_major,
-                        v.compatible() ? "compatible" : "NOT compatible with this host");
+            std::printf("probe: version %s, link %u.%u, rcore ABI %u, %s, game_package %u\n",
+                        v.version.c_str(), v.link_major, v.link_minor, v.abi_major,
+                        v.compatible() ? "compatible" : "NOT compatible with this host",
+                        v.game_package);
             return 0;
         } else if (a == "--runner") spec.runner = utf8_path(val());
         else if (a == "--core") spec.core = utf8_path(val());
         else if (a == "--rom") spec.rom = val();
+        else if (a == "--package") spec.package = val();
         else if (a == "--title-dir") spec.title_dir = utf8_path(val());
         else if (a == "--out") spec.session_dir = utf8_path(val());
         else if (a == "--frames") frames = std::strtoull(val().c_str(), nullptr, 10);
