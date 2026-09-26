@@ -104,16 +104,25 @@ states neither falls back to a fixed 60 Hz.
 
 ## Direct mode
 
-`retro-hub --run-core <title>_core.so --rom <image> [--title-dir D]
+`retro-hub --run-core <core> [--package <shim>] --rom <image> [--title-dir D]
 [--tpak1-rom GB --tpak1-save SAV] [--opt key=value ...] [--no-gl]` boots
 straight into the core and exits when the player closes it. This is the shape a
-standalone release takes (`HOST_LIFECYCLE.md` §3).
+standalone release takes (`HOST_LIFECYCLE.md` §3). `<core>` is a per-title core
+(`<title>_core.so`) or a generic one with the `game_package` capability (such as
+`n64lle_core.so`), which then needs `--package`, the title's generated-code
+package; `--title-dir` then defaults to the shim's directory.
 
-- **Files:**
+- **Files:** `<stem>` is the shim's stem when `--package` is given, else the
+  core's.
   - session logs go to `<data_dir>/sessions/<stem>/` (`runner.log`,
     `core.log`, `events.tsv`);
   - saves go to `<data_dir>/saves/<stem>/<region>.sav`, except where named by
     a flag.
+- **Runner:** `RETRO_CORE_RUNNER` wins; otherwise the newest compatible of the
+  bundled runner (beside `retro-hub`) and `<data_dir>/runtime/<version>/`. The
+  source is logged. With no usable runner, or `--package` and a runner without
+  `game_package 1`, the window shows the error and the hub exits 1. A background
+  runtime update applies from the next launch, never mid-session.
 - **Menu:** the guide button, Esc or F1 open the paused quick menu (Resume,
   Close game). F11 toggles fullscreen.
 - **Input:**
@@ -123,7 +132,8 @@ standalone release takes (`HOST_LIFECYCLE.md` §3).
     Enter = Start.
 - **Faults:** a runner exit the player did not ask for shows the exit code,
   the runner's reason, FAULT and DISPATCH_MISS events, and the last 40 lines
-  of `runner.log`. Saves are written before that screen appears.
+  of `runner.log`. Saves are written before that screen appears. The runner's
+  own `--package` refusals (exit 2) appear on this screen.
 
 ## How it was checked (2026-09-25)
 
