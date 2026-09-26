@@ -10,6 +10,7 @@
 // from shared memory; summary.txt is grepped from core.log.
 
 #include "core_link.hpp"
+#include "runner_probe.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -70,7 +71,15 @@ int main(int argc, char** argv) {
             if (i + 1 >= argc) die(a + " needs a value");
             return args[++i];
         };
-        if (a == "--runner") spec.runner = utf8_path(val());
+        if (a == "--probe") { // what probe_runner reads from a runner, then exit
+            RunnerVersion v;
+            std::string err;
+            if (!probe_runner(utf8_path(val()), v, &err)) die(err);
+            std::printf("probe: version %s, link %u.%u, rcore ABI %u, %s\n", v.version.c_str(),
+                        v.link_major, v.link_minor, v.abi_major,
+                        v.compatible() ? "compatible" : "NOT compatible with this host");
+            return 0;
+        } else if (a == "--runner") spec.runner = utf8_path(val());
         else if (a == "--core") spec.core = utf8_path(val());
         else if (a == "--rom") spec.rom = val();
         else if (a == "--title-dir") spec.title_dir = utf8_path(val());

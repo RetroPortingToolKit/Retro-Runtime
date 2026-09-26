@@ -67,7 +67,8 @@ if(WIN32)
 else()
     set(_retro_transport corelink/transport_posix.cpp)
 endif()
-add_library(retro_corelink STATIC corelink/core_link.cpp ${_retro_transport})
+add_library(retro_corelink STATIC corelink/core_link.cpp corelink/runner_probe.cpp
+            ${_retro_transport})
 target_include_directories(retro_corelink PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/corelink)
 target_link_libraries(retro_corelink PUBLIC retro_rcore)
 if(WIN32)
@@ -139,6 +140,10 @@ if(RETRO_RUNTIME_TOOLS)
                 --out ${CMAKE_CURRENT_BINARY_DIR}/test-link)
     set_tests_properties(link_fake_core PROPERTIES
         PASS_REGULAR_EXPRESSION "10 frame\\(s\\) granted and done, runner exit 0")
+    # probe_runner: what a host reads to choose and verify a runner.
+    add_test(NAME runner_probe COMMAND retro-core-link-test --probe $<TARGET_FILE:retro-core-runner>)
+    set_tests_properties(runner_probe PROPERTIES PASS_REGULAR_EXPRESSION
+        "probe: version ${RETRO_RUNTIME_VERSION}, link [0-9]+\\.[0-9]+, rcore ABI [0-9]+, compatible")
     # A crash mid-session: the runner dies at frame 5 with no unload. The hub
     # must see it end and still write the save as frames 1-4 left it -- the
     # save memory is the hub's (docs/CORE_LINK.md).

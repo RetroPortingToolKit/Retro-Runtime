@@ -529,6 +529,55 @@ void kill_runner(RunnerProcess& p) {
     if (p.running()) TerminateProcess(H(p.process), 1);
 }
 
+std::optional<int> run_to_completion(const SpawnSpec& spec, int timeout_ms, std::string* error) {
+    SECURITY_ATTRIBUTES inherit{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
+    HANDLE log = CreateFileW(spec.log.wstring().c_str(), GENERIC_WRITE,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, &inherit,
+                             CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (log == INVALID_HANDLE_VALUE) {
+        if (error) *error = win_error("open " + path_utf8(spec.log));
+        return std::nullopt;
+    }
+    std::wstring cmd;
+    for (const auto& a : spec.args) append_quoted(cmd, widen(a));
+    const std::wstring app = widen(spec.args[0]);
+    std::vector<wchar_t> env = env_block(spec.env);
+    SIZE_T attr_size = 0;
+    InitializeProcThreadAttributeList(nullptr, 1, 0, &attr_size);
+    std::vector<unsigned char> attr_buf(attr_size);
+    auto* attrs = reinterpret_cast<LPPROC_THREAD_ATTRIBUTE_LIST>(attr_buf.data());
+    InitializeProcThreadAttributeList(attrs, 1, 0, &attr_size);
+    UpdateProcThreadAttribute(attrs, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, &log, sizeof(HANDLE),
+                              nullptr, nullptr);
+    STARTUPINFOEXW si{};
+    si.StartupInfo.cb = sizeof si;
+    si.lpAttributeList = attrs;
+    si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    si.StartupInfo.hStdOutput = log;
+    si.StartupInfo.hStdError = log;
+    PROCESS_INFORMATION pi{};
+    const BOOL created = CreateProcessW(
+        app.c_str(), cmd.data(), nullptr, nullptr, TRUE,
+        EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW, env.data(),
+        nullptr, &si.StartupInfo, &pi);
+    const DWORD create_error = GetLastError();
+    DeleteProcThreadAttributeList(attrs);
+    CloseHandle(log);
+    if (!created) {
+        if (error) *error = win_error("CreateProcess " + spec.args[0], create_error);
+        return std::nullopt;
+    }
+    CloseHandle(pi.hThread);
+    RunnerProcess p;
+    p.process = N(pi.hProcess);
+    if (auto code = wait_exit(p, timeout_ms)) return code;
+    kill_runner(p);
+    wait_exit(p, -1);
+    if (error) *error = spec.args[0] + ": still running after " + std::to_string(timeout_ms) +
+                        " ms; killed";
+    return std::nullopt;
+}
+
 // ---- the runner -------------------------------------------------------------------
 
 bool runner_endpoints(const std::string& link_handles, Channel& control, NativeHandle& shared,

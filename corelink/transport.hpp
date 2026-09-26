@@ -120,6 +120,11 @@ bool spawn_runner(const SpawnSpec& spec, const SharedMemory& region, Channel& hu
 std::optional<int> wait_exit(RunnerProcess& p, int timeout_ms);
 void kill_runner(RunnerProcess& p);
 
+// Runs a program with no link, stdout and stderr to spec.log, and waits up to
+// timeout_ms for it (killing it after that). The exit code, or nullopt when
+// it could not start or was killed. Hosts use it to ask a runner --version.
+std::optional<int> run_to_completion(const SpawnSpec& spec, int timeout_ms, std::string* error);
+
 // ---- the runner: find what the hub handed over ----------------------------
 
 // `link_handles` is the --link-handles value (Windows; empty elsewhere).

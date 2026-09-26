@@ -29,8 +29,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include <spawn.h>
 #if defined(__APPLE__)
-#  include <spawn.h>
 #  include <sys/event.h>
 #else
 #  include <sys/syscall.h>
@@ -454,6 +454,45 @@ std::optional<int> wait_exit(RunnerProcess& p, int timeout_ms) {
 
 void kill_runner(RunnerProcess& p) {
     if (p.pid > 0) ::kill(p.pid, SIGKILL);
+}
+
+std::optional<int> run_to_completion(const SpawnSpec& spec, int timeout_ms, std::string* error) {
+    std::vector<std::string> args = spec.args;
+    std::vector<char*> argv;
+    for (auto& s : args) argv.push_back(s.data());
+    argv.push_back(nullptr);
+    std::vector<std::string> env_strings;
+    for (char** e = environ; e && *e; ++e) env_strings.push_back(*e);
+    env_strings.insert(env_strings.end(), spec.env.begin(), spec.env.end());
+    std::vector<char*> envp;
+    for (auto& s : env_strings) envp.push_back(s.data());
+    envp.push_back(nullptr);
+    const std::string log_path = spec.log.string();
+
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_addopen(&fa, 1, log_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    posix_spawn_file_actions_adddup2(&fa, 1, 2);
+    posix_spawnattr_t attr;
+    posix_spawnattr_init(&attr);
+#if defined(__APPLE__)
+    posix_spawnattr_setflags(&attr, POSIX_SPAWN_CLOEXEC_DEFAULT);
+#endif
+    pid_t pid = -1;
+    const int rc = ::posix_spawn(&pid, argv[0], &fa, &attr, argv.data(), envp.data());
+    posix_spawn_file_actions_destroy(&fa);
+    posix_spawnattr_destroy(&attr);
+    if (rc != 0) {
+        if (error) *error = std::string("posix_spawn ") + argv[0] + ": " + std::strerror(rc);
+        return std::nullopt;
+    }
+    RunnerProcess p;
+    p.pid = pid;
+    if (auto code = wait_exit(p, timeout_ms)) return code;
+    kill_runner(p);
+    wait_exit(p, -1);
+    if (error) *error = args[0] + ": still running after " + std::to_string(timeout_ms) + " ms; killed";
+    return std::nullopt;
 }
 
 // ---- the runner -------------------------------------------------------------------
