@@ -15,6 +15,7 @@ namespace retro::runner {
 
 struct LinkArgs {
     std::string rom;
+    std::string package;     // --package; empty for a core without game_package
     std::string title_dir = ".";
     fs::path out;            // session dir: core.log, events.tsv, the core's cache_dir
     bool gl = false;

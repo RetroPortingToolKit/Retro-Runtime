@@ -215,6 +215,12 @@ std::vector<std::string> verify_manifest(const CoreManifest& m, const LoadedCore
                         " this runner cannot name");
     }
     differ("capabilities", join(m.capabilities), caps);
+    // A generic core gets its title from --package, never from its sidecar
+    // (docs/CORE_ABI.md, "Per-title versus generic cores").
+    if ((info.capabilities & RCORE_CAP_GAME_PACKAGE) && m.has_title) {
+        diffs.push_back("[title]: present, but the library declares game_package "
+                        "(a generic core's sidecar omits [title])");
+    }
 
     const bool lib_has_compat = info.state_compat_id != nullptr;
     if (m.has_state_compat_id != lib_has_compat) {

@@ -20,7 +20,12 @@
 //
 // --version prints what this binary is, one "key value" per line: the release
 // version and commit compiled in, the link protocol and rcore ABI it speaks,
-// and whether --gl is available. Release packaging and hosts read it back.
+// whether --gl is available, and whether it takes --package (game_package).
+// Release packaging and hosts read it back.
+//
+// --package <library>: a GAME_PACKAGE core's generated-code package, passed
+// as rcore_load_params.package_path. Required for such a core, refused for
+// any other. The runner hashes it (SHA-256) and prints it beside the core's.
 //
 // Exit codes: 0 ok; 1 a frame failed or the core reported a FAULT; 2 a
 // refusal before the core ran (bad arguments, load, ABI, manifest); 3 the
@@ -32,6 +37,7 @@
 #include "link_protocol.hpp"
 #include "runner_link.hpp"
 #include "runtime_version.h"
+#include "sha256.hpp"
 #include "transport.hpp"
 
 #include <cstdio>
@@ -233,7 +239,8 @@ void print_version() {
                 "link_protocol %u.%u\n"
                 "rcore_abi_major %u\n"
                 "rcore_draft_revision %u\n"
-                "gl %d\n",
+                "gl %d\n"
+                "game_package 1\n",
                 RETRO_RUNTIME_VERSION, RETRO_RUNTIME_VERSION, RETRO_RUNTIME_COMMIT,
                 retro::corelink::kProtocolMajor, retro::corelink::kProtocolMinor,
                 RCORE_ABI_MAJOR, RCORE_DRAFT_REVISION, gl);
@@ -245,7 +252,7 @@ int main(int argc, char** argv) {
     // UTF-8 on every OS: Windows' argv is the ANSI code page (transport.hpp).
     const std::vector<std::string> args = retro::corelink::utf8_args(argc, argv);
     argc = static_cast<int>(args.size());
-    std::string core_path, rom, title_dir = ".";
+    std::string core_path, rom, package, title_dir = ".";
     fs::path out = ".";
     std::uint64_t frames = 60;
     std::optional<fs::path> load_state, tpak_save, tpak_rtc;
@@ -272,6 +279,7 @@ int main(int argc, char** argv) {
             return 0;
         } else if (a == "--core") core_path = val();
         else if (a == "--rom") rom = val();
+        else if (a == "--package") package = val();
         else if (a == "--title-dir") title_dir = val();
         else if (a == "--out") out = retro::corelink::utf8_path(val());
         else if (a == "--frames") frames = num(val());
@@ -342,6 +350,28 @@ int main(int argc, char** argv) {
         die("this runner drives RUN_FRAME cores only; the core declares none");
     }
 
+    // ---- the game package: required by a GAME_PACKAGE core, refused otherwise
+    const bool wants_package = (info.capabilities & RCORE_CAP_GAME_PACKAGE) != 0;
+    if (wants_package && package.empty()) {
+        die(std::string("core '") + info.core_id +
+            "' declares game_package: --package <library> (the title's generated code) is required");
+    }
+    if (!wants_package && !package.empty()) {
+        die(std::string("--package: core '") + info.core_id +
+            "' does not declare game_package, so it takes no package");
+    }
+    if (wants_package) {
+        // The core opens the package itself; this names the file as it stood
+        // when the runner looked. A package is identity (docs/CORE_ABI.md,
+        // "Netplay"): its hash is logged beside the core's.
+        const fs::path pkg = retro::corelink::utf8_path(package);
+        std::error_code pec;
+        if (!fs::is_regular_file(pkg, pec)) die("--package " + package + ": not a file");
+        const std::string pkg_sha = file_sha256_hex(pkg);
+        if (pkg_sha.empty()) die("--package " + package + ": unreadable");
+        std::printf("package: %s sha256 %s\n", package.c_str(), pkg_sha.c_str());
+    }
+
     // ---- link mode: the hub drives the session -----------------------------
     if (link) {
 #if !defined(RETRO_RUNNER_HAVE_SDL3)
@@ -352,6 +382,7 @@ int main(int argc, char** argv) {
 #endif
         LinkArgs la;
         la.rom = rom;
+        la.package = package;
         la.title_dir = title_dir;
         la.out = out;
         la.gl = gl;
@@ -407,7 +438,7 @@ int main(int argc, char** argv) {
     lp.struct_size = sizeof lp;
     lp.content_path = rom.c_str();
     lp.content_sha256 = nullptr;
-    lp.package_path = nullptr;
+    lp.package_path = package.empty() ? nullptr : package.c_str();
     lp.title_dir = title_dir.c_str();
     lp.accessories = bindings.empty() ? nullptr : bindings.data();
     lp.accessory_count = static_cast<std::uint32_t>(bindings.size());

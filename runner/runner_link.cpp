@@ -203,6 +203,7 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
     rcore_load_params lp{};
     lp.struct_size = sizeof lp;
     lp.content_path = a.rom.c_str();
+    lp.package_path = a.package.empty() ? nullptr : a.package.c_str();
     lp.title_dir = a.title_dir.c_str();
     lp.accessories = bindings.empty() ? nullptr : bindings.data();
     lp.accessory_count = static_cast<std::uint32_t>(bindings.size());
