@@ -44,7 +44,7 @@ bool CoreLink::start(const LaunchSpec& spec, std::string* error) {
     fs::create_directories(spec_.session_dir, ec);
 
     // ---- the shared region: the hub's, so it outlives a crashed runner ------
-    shm_fd_ = ::memfd_create("retcomm-core-link", MFD_CLOEXEC);
+    shm_fd_ = ::memfd_create("retro-core-link", MFD_CLOEXEC);
     if (shm_fd_ < 0 || ::ftruncate(shm_fd_, static_cast<off_t>(shared_total_size())) != 0) {
         return fail(std::string("shared region: ") + std::strerror(errno));
     }

@@ -1,0 +1,107 @@
+# Retro-Runtime: the rcore contract, the host <-> runner link, and
+# retro-core-runner (docs/HOST_LIFECYCLE.md, docs/CORE_ABI.md, docs/CORE_LINK.md,
+# docs/CORE_RUNNER.md).
+#
+# Built standalone (CI, releases), or pulled into a host with add_subdirectory():
+#
+#   retro_rcore          INTERFACE  include/rcore/rcore.h, the contract
+#   retro_core_support   STATIC     a core's sidecar manifest reader and loader
+#                                   (hosts read sidecars; the runner loads cores)
+#   retro_corelink       STATIC     the host side of the link (Linux)
+#   retro-core-runner    exe        the child process that runs a core (Linux)
+#   retro-core-link-test exe        drives a core through the link, as a host does
+#   rcore_fake_core      shared     the smallest core, for tests (never installed)
+#
+# The link is Linux-only until it has a Windows transport (memfd,
+# SOCK_SEQPACKET and SCM_RIGHTS today), so the last four are Linux-only.
+cmake_minimum_required(VERSION 3.20)
+project(RetroRuntime VERSION 0.1.0 LANGUAGES C CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_C_STANDARD 17)
+
+option(RETRO_RUNTIME_TOOLS "Build retro-core-runner, the link test and the fake core" ON)
+# A host that already resolved SDL3 passes its target here; otherwise this
+# looks for SDL3 itself. SDL3 is only used to lend a core a GL context.
+set(RETRO_RUNTIME_SDL3_TARGET "" CACHE STRING "SDL3 target to link the runner against")
+
+add_library(retro_rcore INTERFACE)
+target_include_directories(retro_rcore INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+
+add_library(retro_core_support STATIC
+    runner/core_manifest.cpp
+    runner/core_library.cpp
+    runner/sha256.cpp
+)
+target_include_directories(retro_core_support PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/runner)
+target_link_libraries(retro_core_support PUBLIC retro_rcore ${CMAKE_DL_LIBS})
+set_target_properties(retro_core_support PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+if(UNIX AND NOT APPLE)
+    add_library(retro_corelink STATIC corelink/link_io.cpp corelink/core_link.cpp)
+    target_include_directories(retro_corelink PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/corelink)
+    target_link_libraries(retro_corelink PUBLIC retro_rcore)
+
+    if(RETRO_RUNTIME_TOOLS)
+        set(_sdl "${RETRO_RUNTIME_SDL3_TARGET}")
+        if(NOT _sdl)
+            find_package(SDL3 QUIET)
+            if(TARGET SDL3::SDL3)
+                set(_sdl SDL3::SDL3)
+            else()
+                find_package(PkgConfig QUIET)
+                if(PkgConfig_FOUND)
+                    pkg_check_modules(RETRO_SDL3 IMPORTED_TARGET sdl3)
+                    if(TARGET PkgConfig::RETRO_SDL3)
+                        set(_sdl PkgConfig::RETRO_SDL3)
+                    endif()
+                endif()
+            endif()
+        endif()
+
+        add_executable(retro-core-runner
+            runner/runner_main.cpp
+            runner/runner_link.cpp
+            runner/host_session.cpp
+        )
+        target_link_libraries(retro-core-runner PRIVATE retro_core_support retro_corelink)
+        if(_sdl)
+            target_link_libraries(retro-core-runner PRIVATE ${_sdl})
+            target_compile_definitions(retro-core-runner PRIVATE RETRO_RUNNER_HAVE_SDL3=1)
+        else()
+            message(STATUS "retro-core-runner: no SDL3, so --gl (lending a GL context) is unavailable")
+        endif()
+        install(TARGETS retro-core-runner RUNTIME DESTINATION bin)
+
+        add_executable(retro-core-link-test corelink/link_test_main.cpp)
+        target_link_libraries(retro-core-link-test PRIVATE retro_corelink)
+
+        # The smallest core: silent, states 50/1 after load(), one 64x48 frame
+        # per run_frame. Its sidecar is written beside it.
+        add_library(rcore_fake_core SHARED tests/rcore_fake_core.c)
+        target_link_libraries(rcore_fake_core PRIVATE retro_rcore)
+        set_target_properties(rcore_fake_core PROPERTIES PREFIX "" OUTPUT_NAME fake_core
+                              C_VISIBILITY_PRESET hidden)
+        file(GENERATE OUTPUT $<TARGET_FILE_DIR:rcore_fake_core>/fake_core.rcore.toml CONTENT
+"# Written by CMake for the rcore_fake_core test fixture.\n\n[core]\nabi_major       = 0\ndraft_revision  = 5\nid              = \"fake\"\nversion         = \"1.0\"\nlibrary         = \"fake_core.so\"\nplatforms       = [\"test\"]\ncapabilities    = [\"run_frame\"]\n\n[build]\nengine_commit   = \"\"\nengine_dirty    = false\ntoolchain       = \"\"\ngenerated_utc   = \"\"\n")
+
+        enable_testing()
+        # Headless: the runner loads the fake core, checks its sidecar, runs 10
+        # frames and reports the stated rate.
+        add_test(NAME runner_headless_fake_core
+            COMMAND retro-core-runner --core $<TARGET_FILE:rcore_fake_core>
+                    --rom ${CMAKE_CURRENT_SOURCE_DIR}/LICENSE --frames 10
+                    --out ${CMAKE_CURRENT_BINARY_DIR}/test-headless)
+        set_tests_properties(runner_headless_fake_core PROPERTIES
+            PASS_REGULAR_EXPRESSION "frame rate 50/1")
+        # Link: the same, driven through retro_corelink the way a host does.
+        add_test(NAME link_fake_core
+            COMMAND retro-core-link-test --runner $<TARGET_FILE:retro-core-runner>
+                    --core $<TARGET_FILE:rcore_fake_core>
+                    --rom ${CMAKE_CURRENT_SOURCE_DIR}/LICENSE --frames 10
+                    --out ${CMAKE_CURRENT_BINARY_DIR}/test-link)
+        set_tests_properties(link_fake_core PROPERTIES
+            PASS_REGULAR_EXPRESSION "10 frame\\(s\\) granted and done, runner exit 0")
+    endif()
+endif()

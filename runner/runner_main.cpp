@@ -38,7 +38,7 @@
 #include <utility>
 #include <vector>
 
-#if defined(RETCOMM_RUNNER_HAVE_SDL3)
+#if defined(RETRO_RUNNER_HAVE_SDL3)
 #  include <SDL3/SDL.h>
 #endif
 
@@ -171,7 +171,7 @@ void write_ppm(const fs::path& path, const std::vector<std::uint8_t>& rgba, std:
     }
 }
 
-#if defined(RETCOMM_RUNNER_HAVE_SDL3)
+#if defined(RETRO_RUNNER_HAVE_SDL3)
 void* sdl_gl_proc(const char* name) {
     return reinterpret_cast<void*>(SDL_GL_GetProcAddress(name));
 }
@@ -287,7 +287,7 @@ int main(int argc, char** argv) {
 
     // ---- link mode: the hub drives the session -----------------------------
     if (link) {
-#if !defined(RETCOMM_RUNNER_HAVE_SDL3)
+#if !defined(RETRO_RUNNER_HAVE_SDL3)
         if (gl) die("--gl: this runner was built without SDL3, so it has no GL context to lend");
         void (*lend)(HostSession&) = nullptr;
 #else
@@ -316,7 +316,7 @@ int main(int argc, char** argv) {
         else if (list_options) std::printf("option %s unset\n", k.c_str());
     }
     if (gl) {
-#if defined(RETCOMM_RUNNER_HAVE_SDL3)
+#if defined(RETRO_RUNNER_HAVE_SDL3)
         lend_gl_context(session);
 #else
         die("--gl: this runner was built without SDL3, so it has no GL context to lend");
