@@ -12,6 +12,11 @@
  * outright, with no unload: a crash, as far as the host can tell. The host
  * link must still write the save as frames 1..N-1 left it.
  *
+ * Built with FAKE_GAME_PACKAGE it is fake_pkg_core: core id "fake_pkg", it
+ * also declares GAME_PACKAGE, and load() requires package_path to name a
+ * readable file whose first line is FAKE_PACKAGE_MAGIC (tests/fake_package.txt),
+ * logging "FAKE_PACKAGE ok <path>". Anything else is RCORE_ERR_CONTENT.
+ *
  * Test fixture only; it exports rcore_entry and nothing else. Its sidecar
  * manifest is written beside it by CMake.
  */
@@ -39,9 +44,18 @@ static unsigned long long g_crash_at;
 
 static rcore_save_region k_regions[1];
 
+#if defined(FAKE_GAME_PACKAGE)
+#  define FAKE_ID "fake_pkg"
+#  define FAKE_CAPS (RCORE_CAP_RUN_FRAME | RCORE_CAP_GAME_PACKAGE)
+#  define FAKE_PACKAGE_MAGIC "rcore fake game package"
+#else
+#  define FAKE_ID "fake"
+#  define FAKE_CAPS RCORE_CAP_RUN_FRAME
+#endif
+
 static const rcore_core_info k_info = {
     sizeof(rcore_core_info), RCORE_ABI_MAJOR, RCORE_ABI_MINOR, 0,
-    "fake", "1.0", "test", RCORE_CAP_RUN_FRAME, NULL,
+    FAKE_ID, "1.0", "test", FAKE_CAPS, NULL,
 };
 
 static const rcore_option* opts(uint32_t* count) { *count = 0; return NULL; }
@@ -53,9 +67,40 @@ static rcore_result init(const rcore_host_api* host, const rcore_init_params* pa
     return RCORE_OK;
 }
 
+#if defined(FAKE_GAME_PACKAGE)
+/* The package must be named, readable, and the fixture package. */
+static rcore_result check_package(const rcore_load_params* params) {
+    char line[512], first[64];
+    FILE* f;
+    if (!params->package_path) {
+        g_host->log(g_host->host_ctx, RCORE_LOG_ERROR, "FAKE_PACKAGE missing: no package_path");
+        return RCORE_ERR_CONTENT;
+    }
+    f = fopen(params->package_path, "rb");
+    if (!f || !fgets(first, sizeof first, f) ||
+        strncmp(first, FAKE_PACKAGE_MAGIC, strlen(FAKE_PACKAGE_MAGIC)) != 0) {
+        if (f) fclose(f);
+        snprintf(line, sizeof line, "FAKE_PACKAGE rejected %s", params->package_path);
+        g_host->log(g_host->host_ctx, RCORE_LOG_ERROR, line);
+        return RCORE_ERR_CONTENT;
+    }
+    fclose(f);
+    snprintf(line, sizeof line, "FAKE_PACKAGE ok %s", params->package_path);
+    g_host->log(g_host->host_ctx, RCORE_LOG_INFO, line);
+    return RCORE_OK;
+}
+#endif
+
 static rcore_result load(const rcore_load_params* params, const rcore_save_region** regions,
                          uint32_t* count) {
+#if defined(FAKE_GAME_PACKAGE)
+    {
+        const rcore_result rc = check_package(params);
+        if (rc != RCORE_OK) return rc;
+    }
+#else
     (void)params;
+#endif
     memset(k_regions, 0, sizeof k_regions);
     k_regions[0].struct_size = sizeof(rcore_save_region);
     k_regions[0].kind = RCORE_SAVE_BATTERY;

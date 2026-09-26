@@ -1,0 +1,3 @@
+rcore fake game package
+A stand-in for a generated-code package (<slug>_game.so): the
+fake_pkg_core test fixture checks the first line and nothing else.

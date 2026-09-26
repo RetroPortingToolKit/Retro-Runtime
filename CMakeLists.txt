@@ -11,6 +11,7 @@
 #   retro-core-runner    exe        the child process that runs a core
 #   retro-core-link-test exe        drives a core through the link, as a host does
 #   rcore_fake_core      shared     the smallest core, for tests (never installed)
+#   rcore_fake_pkg_core  shared     the same, declaring game_package (tests only)
 #
 # Linux, macOS and Windows. The link's transport differs per OS
 # (docs/LINK_TRANSPORTS.md); the protocol above it does not.
@@ -119,6 +120,17 @@ if(RETRO_RUNTIME_TOOLS)
     file(GENERATE OUTPUT $<TARGET_FILE_DIR:rcore_fake_core>/fake_core.rcore.toml CONTENT
 "# Written by CMake for the rcore_fake_core test fixture.\n\n[core]\nabi_major       = 0\ndraft_revision  = 5\nid              = \"fake\"\nversion         = \"1.0\"\nlibrary         = \"$<TARGET_FILE_NAME:rcore_fake_core>\"\nplatforms       = [\"test\"]\ncapabilities    = [\"run_frame\"]\n\n[build]\nengine_commit   = \"\"\nengine_dirty    = false\ntoolchain       = \"\"\ngenerated_utc   = \"\"\n")
 
+    # The same core built as a generic one: GAME_PACKAGE, load() requires the
+    # fixture package (tests/fake_package.txt). Its sidecar has no [title]: a
+    # generic core's title comes from --package (docs/CORE_ABI.md).
+    add_library(rcore_fake_pkg_core SHARED tests/rcore_fake_core.c)
+    target_link_libraries(rcore_fake_pkg_core PRIVATE retro_rcore)
+    target_compile_definitions(rcore_fake_pkg_core PRIVATE FAKE_GAME_PACKAGE=1)
+    set_target_properties(rcore_fake_pkg_core PROPERTIES PREFIX "" OUTPUT_NAME fake_pkg_core
+                          C_VISIBILITY_PRESET hidden)
+    file(GENERATE OUTPUT $<TARGET_FILE_DIR:rcore_fake_pkg_core>/fake_pkg_core.rcore.toml CONTENT
+"# Written by CMake for the rcore_fake_pkg_core test fixture.\n\n[core]\nabi_major       = 0\ndraft_revision  = 5\nid              = \"fake_pkg\"\nversion         = \"1.0\"\nlibrary         = \"$<TARGET_FILE_NAME:rcore_fake_pkg_core>\"\nplatforms       = [\"test\"]\ncapabilities    = [\"run_frame\", \"game_package\"]\n\n[build]\nengine_commit   = \"\"\nengine_dirty    = false\ntoolchain       = \"\"\ngenerated_utc   = \"\"\n")
+
     enable_testing()
     # Headless: the runner loads the fake core, checks its sidecar, runs 10
     # frames and reports the stated rate.
@@ -131,7 +143,7 @@ if(RETRO_RUNTIME_TOOLS)
     # --version: what release packaging and hosts read back from the binary.
     add_test(NAME runner_version COMMAND retro-core-runner --version)
     set_tests_properties(runner_version PROPERTIES PASS_REGULAR_EXPRESSION
-        "version ${RETRO_RUNTIME_VERSION}\ncommit [^\n]+\nlink_protocol [0-9]+\\.[0-9]+\n")
+        "version ${RETRO_RUNTIME_VERSION}\ncommit [^\n]+\nlink_protocol [0-9]+\\.[0-9]+\n.*gl [01]\ngame_package 1\n")
     # Link: the same, driven through retro_corelink the way a host does.
     add_test(NAME link_fake_core
         COMMAND retro-core-link-test --runner $<TARGET_FILE:retro-core-runner>
@@ -143,7 +155,7 @@ if(RETRO_RUNTIME_TOOLS)
     # probe_runner: what a host reads to choose and verify a runner.
     add_test(NAME runner_probe COMMAND retro-core-link-test --probe $<TARGET_FILE:retro-core-runner>)
     set_tests_properties(runner_probe PROPERTIES PASS_REGULAR_EXPRESSION
-        "probe: version ${RETRO_RUNTIME_VERSION}, link [0-9]+\\.[0-9]+, rcore ABI [0-9]+, compatible")
+        "probe: version ${RETRO_RUNTIME_VERSION}, link [0-9]+\\.[0-9]+, rcore ABI [0-9]+, compatible, game_package 1")
     # A crash mid-session: the runner dies at frame 5 with no unload. The hub
     # must see it end and still write the save as frames 1-4 left it -- the
     # save memory is the hub's (docs/CORE_LINK.md).
@@ -156,4 +168,21 @@ if(RETRO_RUNTIME_TOOLS)
                 -DROM=${CMAKE_CURRENT_SOURCE_DIR}/LICENSE
                 -DOUT=${CMAKE_CURRENT_BINARY_DIR}/test-crash
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/link_crash_test.cmake)
+    # Game packages: fake_pkg_core with the fixture package, headless and over
+    # the link; and the refusals (no --package for a package core, --package
+    # for a plain one, [title] in a package core's sidecar).
+    foreach(_case headless link missing link_missing unwanted title)
+        add_test(NAME runner_package_${_case}
+            COMMAND ${CMAKE_COMMAND}
+                    "-DEMULATOR=${CMAKE_CROSSCOMPILING_EMULATOR}"
+                    -DCASE=${_case}
+                    -DLINK_TEST=$<TARGET_FILE:retro-core-link-test>
+                    -DRUNNER=$<TARGET_FILE:retro-core-runner>
+                    -DPKG_CORE=$<TARGET_FILE:rcore_fake_pkg_core>
+                    -DPLAIN_CORE=$<TARGET_FILE:rcore_fake_core>
+                    -DPACKAGE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fake_package.txt
+                    -DROM=${CMAKE_CURRENT_SOURCE_DIR}/LICENSE
+                    -DOUT=${CMAKE_CURRENT_BINARY_DIR}/test-package-${_case}
+                    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/package_test.cmake)
+    endforeach()
 endif()
