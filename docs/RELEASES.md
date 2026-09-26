@@ -111,6 +111,7 @@ rcore_abi_major 0
 rcore_draft_revision 5
 gl 1
 game_package 1
+describe 1
 ```
 
 A build outside a release says `version dev`. `game_package 1` (2026-09-26)
@@ -118,6 +119,11 @@ means the runner takes `--package` for a generic core (`CORE_RUNNER.md`); a
 runner from before it prints no such line, and `probe_runner` reports 0. It
 is not yet a field of `runtime-manifest.json`; a host checks it on the
 extracted binary (step 7).
+
+`describe 1` (2026-09-26) means the runner answers `--describe` with format
+version 1 (`CORE_RUNNER.md`, "--describe"); a runner from before it prints
+no such line, and `probe_runner` reports 0. Like `game_package`, it is read
+from the binary, not the manifest.
 
 ## The update rule, for a host
 

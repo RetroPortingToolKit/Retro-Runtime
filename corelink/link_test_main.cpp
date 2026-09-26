@@ -76,10 +76,11 @@ int main(int argc, char** argv) {
             RunnerVersion v;
             std::string err;
             if (!probe_runner(utf8_path(val()), v, &err)) die(err);
-            std::printf("probe: version %s, link %u.%u, rcore ABI %u, %s, game_package %u\n",
+            std::printf("probe: version %s, link %u.%u, rcore ABI %u, %s, game_package %u, "
+                        "describe %u\n",
                         v.version.c_str(), v.link_major, v.link_minor, v.abi_major,
                         v.compatible() ? "compatible" : "NOT compatible with this host",
-                        v.game_package);
+                        v.game_package, v.describe);
             return 0;
         } else if (a == "--runner") spec.runner = utf8_path(val());
         else if (a == "--core") spec.core = utf8_path(val());

@@ -67,6 +67,9 @@ bool probe_runner(const fs::path& runner, RunnerVersion& out, std::string* error
     if (fields.count("game_package") && !num("game_package", v.game_package)) {
         return fail("--version printed an unreadable game_package line");
     }
+    if (fields.count("describe") && !num("describe", v.describe)) {
+        return fail("--version printed an unreadable describe line");
+    }
     const std::string link = fields["link_protocol"];
     const auto dot = link.find('.');
     bool ok = !v.version.empty() && dot != std::string::npos && num("rcore_abi_major", v.abi_major) &&

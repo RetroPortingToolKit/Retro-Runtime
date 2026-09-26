@@ -20,8 +20,22 @@
 //
 // --version prints what this binary is, one "key value" per line: the release
 // version and commit compiled in, the link protocol and rcore ABI it speaks,
-// whether --gl is available, and whether it takes --package (game_package).
-// Release packaging and hosts read it back.
+// whether --gl is available, whether it takes --package (game_package), and
+// whether it answers --describe (describe). Release packaging and hosts read
+// it back.
+//
+// --describe --core <library> [--package <library>]: what the core DECLARES,
+// for a host building a settings page -- no ROM, no init, no session. The
+// library is loaded and its sidecar checked as for a run, then options() and
+// input_descriptors() are read (both "before load", rcore.h) and printed as
+// TAB-separated records, one per line (docs/CORE_RUNNER.md, "--describe"):
+//   describe 1
+//   core     <core_id> <core_version> <platforms>
+//   option   <key> <type> <flags> <has_default> <default> <int_min> <int_max>
+//            <label> <description>
+//   value    <key> <one enum value>        (after its option, in declared order)
+//   input    <button> <axis> <axis_direction> <label>
+// Nothing else goes to stdout. A refusal is exit 2, as for a run.
 //
 // --package <library>: a GAME_PACKAGE core's generated-code package, passed
 // as rcore_load_params.package_path. Required for such a core, refused for
@@ -40,6 +54,7 @@
 #include "sha256.hpp"
 #include "transport.hpp"
 
+#include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -53,6 +68,10 @@
 
 #if defined(RETRO_RUNNER_HAVE_SDL3)
 #  include <SDL3/SDL.h>
+#endif
+#if defined(_WIN32)
+#  include <fcntl.h>
+#  include <io.h>
 #endif
 
 using namespace retro::runner;
@@ -240,10 +259,76 @@ void print_version() {
                 "rcore_abi_major %u\n"
                 "rcore_draft_revision %u\n"
                 "gl %d\n"
-                "game_package 1\n",
+                "game_package 1\n"
+                "describe 1\n",
                 RETRO_RUNTIME_VERSION, RETRO_RUNTIME_VERSION, RETRO_RUNTIME_COMMIT,
                 retro::corelink::kProtocolMajor, retro::corelink::kProtocolMinor,
                 RCORE_ABI_MAJOR, RCORE_DRAFT_REVISION, gl);
+}
+
+// One --describe field: \ TAB LF CR escaped, so a record is one line; a NULL
+// C string is the empty field.
+std::string describe_field(const char* s) {
+    std::string out;
+    for (; s && *s; ++s) {
+        switch (*s) {
+        case '\\': out += "\\\\"; break;
+        case '\t': out += "\\t"; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        default: out += *s;
+        }
+    }
+    return out;
+}
+
+// --describe: print what the core declares, exactly as declared, and nothing
+// the runner would have to make up. Neither init nor load is called.
+void print_description(const LoadedCore& core) {
+#if defined(_WIN32)
+    _setmode(_fileno(stdout), _O_BINARY); // records end in LF on every OS
+#endif
+    const rcore_core_info& info = *core.info;
+    std::string out = "describe\t1\n";
+    out += "core\t" + describe_field(info.core_id) + '\t' + describe_field(info.core_version) +
+           '\t' + describe_field(info.platforms) + '\n';
+    std::uint32_t n = 0;
+    const rcore_option* opts = core.api->options ? core.api->options(&n) : nullptr;
+    for (std::uint32_t i = 0; opts && i < n; ++i) {
+        const rcore_option& o = opts[i];
+        const std::string key = describe_field(o.key);
+        std::string type = o.type == RCORE_OPT_ENUM     ? "enum"
+                           : o.type == RCORE_OPT_BOOL   ? "bool"
+                           : o.type == RCORE_OPT_INT    ? "int"
+                           : o.type == RCORE_OPT_STRING ? "string"
+                                                        : std::to_string(o.type);
+        std::string flags;
+        if (o.flags & RCORE_OPT_FLAG_RESTART) flags += ",restart";
+        if (o.flags & RCORE_OPT_FLAG_NETPLAY) flags += ",netplay";
+        if (o.flags & RCORE_OPT_FLAG_DEVELOPER) flags += ",developer";
+        flags = flags.empty() ? "-" : flags.substr(1);
+        char range[48];
+        std::snprintf(range, sizeof range, "%" PRId64 "\t%" PRId64, o.int_min, o.int_max);
+        out += "option\t" + key + '\t' + type + '\t' + flags + '\t' +
+               (o.default_value ? "1" : "0") + '\t' + describe_field(o.default_value) + '\t' +
+               range + '\t' + describe_field(o.label) + '\t' + describe_field(o.description) +
+               '\n';
+        if (o.type == RCORE_OPT_ENUM && o.values) {
+            for (const char* const* v = o.values; *v; ++v) {
+                out += "value\t" + key + '\t' + describe_field(*v) + '\n';
+            }
+        }
+    }
+    n = 0;
+    const rcore_input_descriptor* descs =
+        core.api->input_descriptors ? core.api->input_descriptors(&n) : nullptr;
+    for (std::uint32_t i = 0; descs && i < n; ++i) {
+        const rcore_input_descriptor& d = descs[i];
+        out += "input\t" + std::to_string(d.button) + '\t' + std::to_string(d.axis) + '\t' +
+               std::to_string(d.axis_direction) + '\t' + describe_field(d.label) + '\n';
+    }
+    std::fwrite(out.data(), 1, out.size(), stdout);
+    std::fflush(stdout);
 }
 
 } // namespace
@@ -258,6 +343,7 @@ int main(int argc, char** argv) {
     std::optional<fs::path> load_state, tpak_save, tpak_rtc;
     std::string tpak_rom, link_handles;
     bool gl = false, strict = false, seat0 = true, list_options = false, link = false;
+    bool describe = false;
     std::optional<std::uint64_t> replay_at;
     std::map<std::string, std::string> overrides;
     std::vector<std::pair<std::uint64_t, std::uint32_t>> script;
@@ -293,6 +379,7 @@ int main(int argc, char** argv) {
         else if (a == "--strict") strict = true;
         else if (a == "--no-seats") seat0 = false;
         else if (a == "--list-options") list_options = true;
+        else if (a == "--describe") describe = true;
         else if (a == "--replay-at") replay_at = num(val());
         else if (a == "--opt") {
             const std::string kv = val();
@@ -318,20 +405,24 @@ int main(int argc, char** argv) {
         }
     }
     if (core_path.empty()) die("--core <library> is required");
-    if (rom.empty()) die("--rom <image> is required");
+    if (rom.empty() && !describe) die("--rom <image> is required");
     std::error_code ec;
-    fs::create_directories(out, ec);
+    if (!describe) fs::create_directories(out, ec);
 
     // ---- load: hash the file that is loaded, then the one symbol ---------
     LoadedCore core;
     std::string err;
     if (!load_core(retro::corelink::utf8_path(core_path), core, &err)) die(err);
     const rcore_core_info& info = *core.info;
-    std::printf("core: %s %s platforms=%s capabilities=0x%llx state_compat_id=%s\n",
-                info.core_id, info.core_version, info.platforms,
-                static_cast<unsigned long long>(info.capabilities),
-                info.state_compat_id ? info.state_compat_id : "NULL");
-    std::printf("identity: sha256 %s\n", core.sha256.c_str());
+    // --describe's stdout is its records alone: the lines a run prints about
+    // the core and its sidecar are left out, the checks are not.
+    if (!describe) {
+        std::printf("core: %s %s platforms=%s capabilities=0x%llx state_compat_id=%s\n",
+                    info.core_id, info.core_version, info.platforms,
+                    static_cast<unsigned long long>(info.capabilities),
+                    info.state_compat_id ? info.state_compat_id : "NULL");
+        std::printf("identity: sha256 %s\n", core.sha256.c_str());
+    }
 
     // ---- the sidecar must agree with the library, field for field --------
     CoreManifest manifest;
@@ -343,16 +434,23 @@ int main(int argc, char** argv) {
         for (const auto& d : diffs) std::fprintf(stderr, "  %s\n", d.c_str());
         return 2;
     }
-    std::printf("manifest: %s agrees (draft revision %ld; runner %u)%s\n",
-                manifest.path.filename().string().c_str(), manifest.draft_revision,
-                RCORE_DRAFT_REVISION, manifest.engine_dirty ? "; engine DIRTY" : "");
-    if (!(info.capabilities & RCORE_CAP_RUN_FRAME) || !core.api->run_frame) {
+    if (!describe) {
+        std::printf("manifest: %s agrees (draft revision %ld; runner %u)%s\n",
+                    manifest.path.filename().string().c_str(), manifest.draft_revision,
+                    RCORE_DRAFT_REVISION, manifest.engine_dirty ? "; engine DIRTY" : "");
+    }
+    // Describing drives nothing, so an OWNS_LOOP core's declarations are
+    // readable too.
+    if (!describe && (!(info.capabilities & RCORE_CAP_RUN_FRAME) || !core.api->run_frame)) {
         die("this runner drives RUN_FRAME cores only; the core declares none");
     }
 
     // ---- the game package: required by a GAME_PACKAGE core, refused otherwise
+    // --describe keeps the refusals but not the requirement: the declarations
+    // are the core's, read before load, and a package reaches a core only
+    // through load(). So a package core describes itself without one.
     const bool wants_package = (info.capabilities & RCORE_CAP_GAME_PACKAGE) != 0;
-    if (wants_package && package.empty()) {
+    if (wants_package && package.empty() && !describe) {
         die(std::string("core '") + info.core_id +
             "' declares game_package: --package <library> (the title's generated code) is required");
     }
@@ -360,7 +458,7 @@ int main(int argc, char** argv) {
         die(std::string("--package: core '") + info.core_id +
             "' does not declare game_package, so it takes no package");
     }
-    if (wants_package) {
+    if (!package.empty()) {
         // The core opens the package itself; this names the file as it stood
         // when the runner looked. A package is identity (docs/CORE_ABI.md,
         // "Netplay"): its hash is logged beside the core's.
@@ -369,7 +467,12 @@ int main(int argc, char** argv) {
         if (!fs::is_regular_file(pkg, pec)) die("--package " + package + ": not a file");
         const std::string pkg_sha = file_sha256_hex(pkg);
         if (pkg_sha.empty()) die("--package " + package + ": unreadable");
-        std::printf("package: %s sha256 %s\n", package.c_str(), pkg_sha.c_str());
+        if (!describe) std::printf("package: %s sha256 %s\n", package.c_str(), pkg_sha.c_str());
+    }
+
+    if (describe) {
+        print_description(core);
+        return 0;
     }
 
     // ---- link mode: the hub drives the session -----------------------------

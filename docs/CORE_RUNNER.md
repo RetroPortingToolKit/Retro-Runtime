@@ -53,9 +53,14 @@ This page covers what exists and how it is checked.
    --tpak1-save --tpak1-rtc --gl --strict --no-seats --replay-at --opt
    --input-script --list-options`).
 
+5. **Describes a core** (`--describe`, 2026-09-26) for a host building a
+   settings page: `--describe --core <library> [--package <library>]`, no
+   `--rom`. See "--describe" below.
+
 `--version` prints the release version, commit, link protocol and rcore ABI
-compiled in, whether `--gl` is available, and `game_package 1` (this runner
-takes `--package`), and exits 0 (`RELEASES.md`).
+compiled in, whether `--gl` is available, `game_package 1` (this runner
+takes `--package`) and `describe 1` (this runner answers `--describe`), and
+exits 0 (`RELEASES.md`).
 
 Exit codes:
 
@@ -65,6 +70,48 @@ Exit codes:
 | 1 | a frame failed, or the core reported a FAULT |
 | 2 | refused before the core ran: arguments, load, ABI, manifest or game package |
 | 3 | the core broke the contract: an undeclared option key |
+
+## `--describe`
+
+What a core declares, printed without a ROM and without a session. The runner
+loads the library and checks its sidecar exactly as for a run (a refusal is
+exit 2, message on stderr, nothing on stdout). It then reads `options()` and
+`input_descriptors()`, which `rcore.h` declares "before load" and which the
+session already reads before `init`. It calls neither `init` nor `load`, and
+it does not refuse an `OWNS_LOOP` core, because nothing is driven.
+
+`--package` gets the same refusals as for a run (a core without
+`game_package` refuses one; it must be a readable file). A `game_package`
+core is described without one too: a package reaches a core only through
+`load()`, so it cannot change what is declared before it.
+
+Stdout is UTF-8, one record per line, fields separated by one TAB, and
+nothing else:
+
+```
+describe	1
+core	<core_id>	<core_version>	<platforms>
+option	<key>	<type>	<flags>	<has_default>	<default>	<int_min>	<int_max>	<label>	<description>
+value	<key>	<one enum value>
+input	<button>	<axis>	<axis_direction>	<label>
+```
+
+- Every field escapes `\` as `\\`, TAB as `\t`, LF as `\n` and CR as `\r`, so a
+  record is always one line. A NULL C string is the empty field.
+- `<type>` is `enum`, `bool`, `int` or `string`; a type this runner does not
+  know prints as its number.
+- `<flags>` is a comma-separated subset of `restart,netplay,developer`, in
+  that order, or `-` for none.
+- `<has_default>` is `1` when `default_value` is non-NULL, else `0` (unset:
+  the core applies its own default); `<default>` is the value or empty.
+- `<int_min>` and `<int_max>` are decimal int64, printed for every type.
+- `value` records follow their enum option, one per entry of its
+  NULL-terminated `values`, in declared order.
+- `<button>` is the `RCORE_PAD_*` bit in decimal (0 for an axis),
+  `<axis>` is as declared (`RCORE_AXIS_*` + 1, or 0), and `<axis_direction>`
+  is a signed decimal.
+- Options and inputs appear in declared order. `describe 1` is the format's
+  version.
 
 ## How it is checked
 
@@ -102,6 +149,14 @@ fake core built with `game_package`, sidecar without `[title]`) and
 package's hash logged, and each refusal above exits 2
 (`runner_package_*`, `tests/package_test.cmake`). No real generic core has
 run through it yet.
+
+`--describe` (2026-09-26) is checked by ctest on both fake cores, whose
+options and inputs cover every type and flag, NULL defaults and
+descriptions, and a TAB, LF, CR and backslash inside a field. Each case
+compares stdout byte for byte (`runner_describe_*`,
+`tests/describe_test.cmake`). **Run by hand 2026-09-26** on n64lle's generic
+`n64lle_core.so` (0.374.0, sidecar beside it): exit 0, 76 options, 16 enum
+values and 16 inputs, every record with its field count.
 
 ## Not built yet
 

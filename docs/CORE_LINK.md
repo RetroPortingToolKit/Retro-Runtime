@@ -76,6 +76,8 @@ hub                                    runner
   hub that needs it as data hashes the file it passed. `retro-core-link-test
   --package` drives it, and `probe_runner` reads `game_package` from
   `--version` (`RunnerVersion::game_package`, 0 for a runner from before it).
+  It reads `describe` the same way (`RunnerVersion::describe`): whether the
+  runner answers `--describe`, which is not a link session (`CORE_RUNNER.md`).
 - **Input rides inside each Grant**, so the contract's "identical within one
   frame" holds by construction.
 - **SavesFilled carries the seats as they stand before frame 1.** A core may
