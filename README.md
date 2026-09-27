@@ -27,6 +27,29 @@ ctest --test-dir build
 - Linux, macOS and Windows. The link's transport differs per OS
   (`docs/LINK_TRANSPORTS.md`); the protocol above it does not.
 
+### Build locally
+
+To build a runner for this machine and hand it to a port or app as an explicit
+runner (`--runner`, `RETRO_CORE_RUNNER`):
+
+```sh
+scripts/build-local.sh            # Linux, macOS
+scripts\build-local.ps1           # Windows (finds Visual Studio itself)
+```
+
+It builds Release (`--debug` for Debug), copies `retro-core-runner` and
+`LICENSE` into `out/local/<platform>/`, checks the copy's `--version`, and
+prints `RETRO_CORE_RUNNER=<absolute path>` as its last line. SDL3 is used if
+found (`--sdl3-prefix DIR` to name one, `--no-sdl` to go without); the output
+says whether `--gl` is available. A shared SDL3 from outside the system
+library directories is copied beside the runner. The runner says `version dev`
+and its commit, with `-dirty` when tracked files are modified. `--test` runs
+ctest; `--help` lists the rest. This is not a release build: see
+`docs/RELEASES.md`.
+
+Only the Linux path of `build-local.sh` has been run (2026-09-26). Its macOS
+path and `build-local.ps1` are written but unrun.
+
 A host pulls this in with `add_subdirectory()` and links `retro_rcore`,
 `retro_core_support` and `retro_corelink`. A host that already found SDL3 can
 pass `-DRETRO_RUNTIME_SDL3_TARGET=<target>`.

@@ -17,7 +17,10 @@ Run the `release` workflow from the Actions tab (manual only):
 | `publish` | Off: a dry run that builds, checks and uploads workflow artifacts only. |
 
 Each platform is built by `scripts/package-release.sh`, which a person can also
-run. It fails the build, rather than warning, when:
+run. (For a runner to develop against, not to ship, use
+`scripts/build-local.sh` / `.ps1` instead: README, "Build locally". It needs no
+version, SDL3 prefix or 7z, says `version dev`, and has none of the gates
+below.) It fails the build, rather than warning, when:
 
 - the runner cannot lend a GL context (SDL3 missing);
 - the runner imports anything but the C library (SDL3, libstdc++ and libgcc
