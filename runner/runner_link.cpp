@@ -12,6 +12,23 @@
 
 namespace retro::runner {
 
+std::vector<rcore_accessory_binding> transfer_pak_bindings(
+    const std::array<std::string, kTransferPakSeats>& roms) {
+    std::vector<rcore_accessory_binding> out;
+    for (std::size_t seat = 0; seat < roms.size(); ++seat) {
+        if (roms[seat].empty()) continue;
+        rcore_accessory_binding b{};
+        b.struct_size = sizeof b;
+        b.seat = static_cast<std::uint32_t>(seat);
+        b.slot = 0;
+        b.type_id = "n64.transfer_pak";
+        b.content_path = roms[seat].c_str();
+        b.content_sha256 = nullptr;
+        out.push_back(b);
+    }
+    return out;
+}
+
 using namespace retro::corelink;
 
 namespace {
@@ -206,14 +223,7 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         return exiting(sock, 2, "init -> " + std::to_string(rc));
     }
 
-    std::vector<rcore_accessory_binding> bindings;
-    if (!a.tpak_rom.empty()) {
-        rcore_accessory_binding b{};
-        b.struct_size = sizeof b;
-        b.type_id = "n64.transfer_pak";
-        b.content_path = a.tpak_rom.c_str();
-        bindings.push_back(b);
-    }
+    std::vector<rcore_accessory_binding> bindings = transfer_pak_bindings(a.tpak_roms);
     rcore_load_params lp{};
     lp.struct_size = sizeof lp;
     lp.content_path = a.rom.c_str();

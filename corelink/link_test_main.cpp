@@ -108,9 +108,15 @@ int main(int argc, char** argv) {
         else if (a == "--out") spec.session_dir = utf8_path(val());
         else if (a == "--frames") frames = std::strtoull(val().c_str(), nullptr, 10);
         else if (a == "--load-state") spec.load_state = utf8_path(val());
-        else if (a == "--tpak1-rom") spec.tpak_rom = val();
-        else if (a == "--tpak1-save") spec.save_files["tpak1"] = utf8_path(val());
-        else if (a == "--tpak1-rtc") spec.save_files["tpak1.rtc"] = utf8_path(val());
+        else if (a.size() >= 11 && a.compare(0, 6, "--tpak") == 0 && a[6] >= '1' && a[6] <= '4') {
+            const std::size_t seat = static_cast<std::size_t>(a[6] - '1');
+            const std::string id = "tpak" + std::string(1, a[6]);
+            const std::string what = a.substr(7);
+            if (what == "-rom") spec.tpak_roms[seat] = val();
+            else if (what == "-save") spec.save_files[id] = utf8_path(val());
+            else if (what == "-rtc") spec.save_files[id + ".rtc"] = utf8_path(val());
+            else die("unknown argument " + a);
+        }
         else if (a == "--save") { // <region id>=<file>
             const std::string kv = val();
             const auto eq = kv.find('=');

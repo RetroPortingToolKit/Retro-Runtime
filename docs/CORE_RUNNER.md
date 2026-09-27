@@ -51,7 +51,10 @@ This page covers what exists and how it is checked.
    compares. Its command line and outputs match n64lle's `rcore_probe`
    (`--core --package --rom --title-dir --out --frames --load-state --tpak1-rom
    --tpak1-save --tpak1-rtc --gl --strict --no-seats --replay-at --opt
-   --input-script --list-options`).
+   --input-script --list-options`). The Transfer Pak flags go up to seat 4
+   (`--tpakN-rom`, `--tpakN-save`, `--tpakN-rtc`, N = 1-4; 2026-09-27): each
+   seat with a cartridge gets an `n64.transfer_pak` binding at slot 0, and its
+   save regions are `tpakN` and `tpakN.rtc`.
 5. **Savestates** (`runner/state_keeper.*`, 2026-09-26). The runner writes
    and checks the savestate envelope (`OVERLAY.md`, `CORE_ABI.md`
    "Savestates"). It holds every identity the load rule compares: the core's
@@ -73,8 +76,9 @@ This page covers what exists and how it is checked.
 
 `--version` prints the release version, commit, link protocol and rcore ABI
 compiled in, whether `--gl` is available, `game_package 1` (this runner
-takes `--package`) and `describe 1` (this runner answers `--describe`), and
-exits 0 (`RELEASES.md`).
+takes `--package`), `describe 1` (this runner answers `--describe`) and
+`transfer_pak_seats 4` (it takes `--tpak1-rom` to `--tpak4-rom`; a runner
+without the line takes seat 1 only), and exits 0 (`RELEASES.md`).
 
 Exit codes:
 

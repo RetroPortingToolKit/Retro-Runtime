@@ -55,6 +55,7 @@
 #include "state_keeper.hpp"
 #include "transport.hpp"
 
+#include <array>
 #include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
@@ -261,10 +262,11 @@ void print_version() {
                 "rcore_draft_revision %u\n"
                 "gl %d\n"
                 "game_package 1\n"
-                "describe 1\n",
+                "describe 1\n"
+                "transfer_pak_seats %zu\n",
                 RETRO_RUNTIME_VERSION, RETRO_RUNTIME_VERSION, RETRO_RUNTIME_COMMIT,
                 retro::corelink::kProtocolMajor, retro::corelink::kProtocolMinor,
-                RCORE_ABI_MAJOR, RCORE_DRAFT_REVISION, gl);
+                RCORE_ABI_MAJOR, RCORE_DRAFT_REVISION, gl, retro::runner::kTransferPakSeats);
 }
 
 // One --describe field: \ TAB LF CR escaped, so a record is one line; a NULL
@@ -341,8 +343,12 @@ int main(int argc, char** argv) {
     std::string core_path, rom, package, title_dir = ".";
     fs::path out = ".";
     std::uint64_t frames = 60;
-    std::optional<fs::path> load_state, tpak_save, tpak_rtc;
-    std::string tpak_rom, link_handles;
+    std::optional<fs::path> load_state;
+    // --tpakN-rom / -save / -rtc, N = 1-4: seat N's Transfer Pak cartridge,
+    // its battery save and its MBC3 clock.
+    std::array<std::string, retro::runner::kTransferPakSeats> tpak_roms;
+    std::array<std::optional<fs::path>, retro::runner::kTransferPakSeats> tpak_saves, tpak_rtcs;
+    std::string link_handles;
     bool gl = false, strict = false, seat0 = true, list_options = false, link = false;
     bool describe = false;
     std::optional<std::uint64_t> replay_at;
@@ -371,9 +377,18 @@ int main(int argc, char** argv) {
         else if (a == "--out") out = retro::corelink::utf8_path(val());
         else if (a == "--frames") frames = num(val());
         else if (a == "--load-state") load_state = retro::corelink::utf8_path(val());
-        else if (a == "--tpak1-rom") tpak_rom = val();
-        else if (a == "--tpak1-save") tpak_save = retro::corelink::utf8_path(val());
-        else if (a == "--tpak1-rtc") tpak_rtc = retro::corelink::utf8_path(val());
+        else if (a.size() == 11 && a.compare(0, 6, "--tpak") == 0 && a[6] >= '1' &&
+                 a[6] < static_cast<char>('1' + retro::runner::kTransferPakSeats) &&
+                 a.compare(7, 4, "-rom") == 0)
+            tpak_roms[static_cast<std::size_t>(a[6] - '1')] = val();
+        else if (a.size() == 12 && a.compare(0, 6, "--tpak") == 0 && a[6] >= '1' &&
+                 a[6] < static_cast<char>('1' + retro::runner::kTransferPakSeats) &&
+                 a.compare(7, 5, "-save") == 0)
+            tpak_saves[static_cast<std::size_t>(a[6] - '1')] = retro::corelink::utf8_path(val());
+        else if (a.size() == 11 && a.compare(0, 6, "--tpak") == 0 && a[6] >= '1' &&
+                 a[6] < static_cast<char>('1' + retro::runner::kTransferPakSeats) &&
+                 a.compare(7, 4, "-rtc") == 0)
+            tpak_rtcs[static_cast<std::size_t>(a[6] - '1')] = retro::corelink::utf8_path(val());
         else if (a == "--gl") gl = true;
         else if (a == "--link") link = true;
         else if (a == "--link-handles") link_handles = val();
@@ -495,7 +510,7 @@ int main(int argc, char** argv) {
         la.strict = strict;
         la.overrides = overrides;
         la.load_state = load_state;
-        la.tpak_rom = tpak_rom;
+        la.tpak_roms = tpak_roms;
         la.link_handles = link_handles;
         std::fflush(stdout);
         return run_link_mode(core, manifest, la, lend);
@@ -528,18 +543,8 @@ int main(int argc, char** argv) {
         die("init -> " + std::to_string(rc));
     }
 
-    // ---- load: content, the Transfer Pak binding, host-owned saves -------
-    std::vector<rcore_accessory_binding> bindings;
-    if (!tpak_rom.empty()) {
-        rcore_accessory_binding b{};
-        b.struct_size = sizeof b;
-        b.seat = 0;
-        b.slot = 0;
-        b.type_id = "n64.transfer_pak";
-        b.content_path = tpak_rom.c_str();
-        b.content_sha256 = nullptr;
-        bindings.push_back(b);
-    }
+    // ---- load: content, the Transfer Pak bindings, host-owned saves ------
+    std::vector<rcore_accessory_binding> bindings = retro::runner::transfer_pak_bindings(tpak_roms);
     rcore_load_params lp{};
     lp.struct_size = sizeof lp;
     lp.content_path = rom.c_str();
@@ -554,8 +559,12 @@ int main(int argc, char** argv) {
         die("load -> " + std::to_string(rc));
     }
     std::map<std::string, fs::path> save_files;
-    if (tpak_save) save_files["tpak1"] = *tpak_save;
-    if (tpak_rtc) save_files["tpak1.rtc"] = *tpak_rtc;
+    // The core names seat N's regions tpakN and tpakN.rtc (docs/CORE_ABI.md).
+    for (std::size_t seat = 0; seat < retro::runner::kTransferPakSeats; ++seat) {
+        const std::string id = "tpak" + std::to_string(seat + 1);
+        if (tpak_saves[seat]) save_files[id] = *tpak_saves[seat];
+        if (tpak_rtcs[seat]) save_files[id + ".rtc"] = *tpak_rtcs[seat];
+    }
     session.adopt_save_regions(regs, nregs, save_files);
     for (const SaveRegion& r : session.save_regions()) {
         std::printf("save region %s: kind=%u seat=%u size=%zu from %s\n", r.id.c_str(), r.kind,

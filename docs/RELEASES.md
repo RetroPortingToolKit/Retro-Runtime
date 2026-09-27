@@ -115,6 +115,7 @@ rcore_draft_revision 5
 gl 1
 game_package 1
 describe 1
+transfer_pak_seats 4
 ```
 
 A build outside a release says `version dev`. `game_package 1` (2026-09-26)

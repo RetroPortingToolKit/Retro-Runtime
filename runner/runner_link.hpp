@@ -9,9 +9,21 @@
 
 #include <map>
 #include <optional>
+#include <array>
+#include <cstddef>
 #include <string>
+#include <vector>
 
 namespace retro::runner {
+
+// Seats that can carry a Transfer Pak: the N64's four controller ports
+// (`transfer_pak_seats` in --version; --tpak1-rom .. --tpak4-rom).
+constexpr std::size_t kTransferPakSeats = 4;
+
+// One n64.transfer_pak binding per seat that has a cartridge (slot 0: one pak
+// per controller, rcore.h / docs/CORE_ABI.md). The strings must outlive them.
+std::vector<rcore_accessory_binding> transfer_pak_bindings(
+    const std::array<std::string, kTransferPakSeats>& roms);
 
 struct LinkArgs {
     std::string rom;
@@ -23,7 +35,9 @@ struct LinkArgs {
     bool strict = false;
     std::map<std::string, std::string> overrides;
     std::optional<fs::path> load_state;
-    std::string tpak_rom;
+    // --tpakN-rom: the Game Boy cartridge in seat N's Transfer Pak (N = 1-4),
+    // empty for a seat without one.
+    std::array<std::string, kTransferPakSeats> tpak_roms;
     std::string link_handles; // --link-handles (Windows)
 };
 
