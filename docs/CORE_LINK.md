@@ -38,17 +38,23 @@ The runner is released and updated separately from the hosts that start it
   speaks the lower of the two, and neither side sends anything the other's
   minor does not know.
 
-**Known defect (2026-09-26): the minor rule is not implemented.**
-- `as_msg` accepts only a packet of exactly `sizeof(M)`, and every sender
-  sends `sizeof(M)` whatever the session's minor.
-- So a field appended in a minor release would make an older peer silently
-  drop that whole message.
-- Before the first minor bump, either senders must size messages by the
-  session's minor, or `as_msg` must accept a longer packet and ignore the tail
-  (`LINK_TRANSPORTS.md` §10).
+**The minor rule, as the code keeps it** (fixed 2026-09-26, with 1.1; until
+then `as_msg` took only an exact size, `LINK_TRANSPORTS.md` §10):
+- A reader takes a packet at least as long as the message it knows, ignores a
+  longer packet's tail (a newer peer appended fields), and zero-fills a field
+  an older peer did not send, down to the message's pre-append size
+  (`as_msg`'s `min_size`; `link_io.hpp`).
+- A 1.0 peer still demands the exact 1.0 size. So a message that grows must be
+  sent at its old size to a session speaking an older minor. No message has
+  grown yet: 1.1 only adds message types.
+- A side sends a new message type only when the session's minor has it: the
+  hub checks `CoreIdentity::protocol_minor` (`CoreLink::states_supported()`).
 
-**1.0** (2026-09-25) is the layout described on this page. It resets the
-unreleased development counter, which had reached 3.
+**1.0** (2026-09-25) is the layout described below, less the savestate
+messages. It reset the unreleased development counter, which had reached 3.
+
+**1.1** (2026-09-26) adds savestates: `SaveState` and `LoadState` (hub to
+runner) and `StateDone` (runner to hub), described under "Savestates" below.
 
 ## A session
 
@@ -66,6 +72,10 @@ hub                                    runner
  Grant(frame k, every seat's pad) -->       run_frame; picture -> shared slot
                            <-- FrameDone(k)
  ...
+ SaveState(path) / LoadState(path) -->      1.1, between frames: serialize or
+                                            check + unserialize; the envelope
+                           <-- StateDone     ok, or the reason
+ ...
  Quit -->                                   unload, deinit, exit 0
 ```
 
@@ -80,6 +90,21 @@ hub                                    runner
   runner answers `--describe`, which is not a link session (`CORE_RUNNER.md`).
 - **Input rides inside each Grant**, so the contract's "identical within one
   frame" holds by construction.
+- **Savestates (1.1) are taken between frames.** The hub sends `SaveState` or
+  `LoadState` only while no grant is outstanding, and grants nothing until
+  `StateDone` (`CoreLink::request_save_state` / `request_load_state` /
+  `take_state_result`).
+  - **The runner writes and checks the envelope**
+    (`state/state_envelope.hpp`, `CORE_ABI.md` "Savestates"), because it
+    holds every identity the load rule compares.
+  - The path is the hub's choice. The thumbnail is the last frame the runner
+    published.
+  - A refused or failed load leaves the machine as it was and answers with the
+    reason, naming both values. The session runs on.
+  - A 1.0 runner never receives these messages: the hub asks
+    `states_supported()` first.
+  - The hub's save-state browser is Retro-Runtime's `retro_overlay`
+    (`OVERLAY.md`).
 - **SavesFilled carries the seats as they stand before frame 1.** A core may
   read input outside a frame, and a seat's `connected` flag is guest-visible.
   Without this, n64lle reading the controllers while `unserialize()` restored a
@@ -126,7 +151,9 @@ package; `--title-dir` then defaults to the shim's directory.
   `game_package 1`, the window shows the error and the hub exits 1. A background
   runtime update applies from the next launch, never mid-session.
 - **Menu:** the guide button, Esc or F1 open the paused quick menu (Resume,
-  Close game). F11 toggles fullscreen.
+  Save states, Show FPS, Volume, Close game). F11 toggles fullscreen.
+- **Overlay** (`OVERLAY.md`): F3 FPS, Tab (held) turbo, +/- volume, F7 or
+  SELECT + R1 save states.
 - **Input:**
   - Gamepads fill seats 0–3 in the order SDL lists them.
   - With none attached, the keyboard is port 1: arrows = D-pad, X/Z/C/S = the
@@ -169,7 +196,6 @@ All on `pokemonstadium_core.so` built clean from n64lle `ffa84cfc`.
 - **Per-title options, accessories and save choice** from the title page.
   Library launch itself exists: see `CORE_LIBRARY.md`.
 - **Netplay through the runner** (rev 4).
-- **Savestates from the quick menu,** with the envelope.
 - **Options UI.** Options come only from `--opt`.
 - **Accessory binding UI, per-seat remapping, hot-plug.**
 - **The hub on macOS and Windows.** Retro Launcher builds `hub_play.cpp` only on

@@ -8,6 +8,10 @@
 #   retro_core_support   STATIC     a core's sidecar manifest reader and loader
 #                                   (hosts read sidecars; the runner loads cores)
 #   retro_corelink       STATIC     the host side of the link
+#   retro_state          STATIC     the savestate envelope (the runner writes and
+#                                   checks it; hosts read its header to list slots)
+#   retro_overlay        STATIC     what a host draws over a running core: FPS,
+#                                   TURBO, volume, toasts, the save-state browser
 #   retro-core-runner    exe        the child process that runs a core
 #   retro-core-link-test exe        drives a core through the link, as a host does
 #   rcore_fake_core      shared     the smallest core, for tests (never installed)
@@ -76,6 +80,17 @@ if(WIN32)
     target_link_libraries(retro_corelink PUBLIC advapi32 bcrypt shell32)
 endif()
 
+add_library(retro_state STATIC state/state_envelope.cpp)
+target_include_directories(retro_state PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/state)
+target_link_libraries(retro_state PUBLIC retro_core_support)
+
+# No SDL, no GL, no clock: a host passes the time in and draws the images
+# (docs/OVERLAY.md).
+add_library(retro_overlay STATIC overlay/overlay_font.cpp overlay/overlay_raster.cpp
+            overlay/osd.cpp overlay/savestate_menu.cpp)
+target_include_directories(retro_overlay PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/overlay)
+target_link_libraries(retro_overlay PUBLIC retro_rcore PRIVATE retro_state)
+
 if(RETRO_RUNTIME_TOOLS)
     set(_sdl "${RETRO_RUNTIME_SDL3_TARGET}")
     if(NOT _sdl)
@@ -97,8 +112,12 @@ if(RETRO_RUNTIME_TOOLS)
         runner/runner_main.cpp
         runner/runner_link.cpp
         runner/host_session.cpp
+        runner/state_keeper.cpp
     )
-    target_link_libraries(retro-core-runner PRIVATE retro_core_support retro_corelink)
+    # Threads: the savestate keeper hashes content off the core thread.
+    find_package(Threads REQUIRED)
+    target_link_libraries(retro-core-runner PRIVATE retro_core_support retro_corelink retro_state
+                          Threads::Threads)
     target_include_directories(retro-core-runner PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
     if(_sdl)
         target_link_libraries(retro-core-runner PRIVATE ${_sdl})
@@ -112,13 +131,13 @@ if(RETRO_RUNTIME_TOOLS)
     target_link_libraries(retro-core-link-test PRIVATE retro_corelink)
 
     # The smallest core: silent, states 50/1 after load(), one 64x48 frame
-    # per run_frame. Its sidecar is written beside it.
+    # per run_frame, a 12-byte savestate. Its sidecar is written beside it.
     add_library(rcore_fake_core SHARED tests/rcore_fake_core.c)
     target_link_libraries(rcore_fake_core PRIVATE retro_rcore)
     set_target_properties(rcore_fake_core PROPERTIES PREFIX "" OUTPUT_NAME fake_core
                           C_VISIBILITY_PRESET hidden)
     file(GENERATE OUTPUT $<TARGET_FILE_DIR:rcore_fake_core>/fake_core.rcore.toml CONTENT
-"# Written by CMake for the rcore_fake_core test fixture.\n\n[core]\nabi_major       = 0\ndraft_revision  = 5\nid              = \"fake\"\nversion         = \"1.0\"\nlibrary         = \"$<TARGET_FILE_NAME:rcore_fake_core>\"\nplatforms       = [\"test\"]\ncapabilities    = [\"run_frame\"]\n\n[build]\nengine_commit   = \"\"\nengine_dirty    = false\ntoolchain       = \"\"\ngenerated_utc   = \"\"\n")
+"# Written by CMake for the rcore_fake_core test fixture.\n\n[core]\nabi_major       = 0\ndraft_revision  = 5\nid              = \"fake\"\nversion         = \"1.0\"\nlibrary         = \"$<TARGET_FILE_NAME:rcore_fake_core>\"\nplatforms       = [\"test\"]\ncapabilities    = [\"run_frame\", \"savestate\"]\n\n[build]\nengine_commit   = \"\"\nengine_dirty    = false\ntoolchain       = \"\"\ngenerated_utc   = \"\"\n")
 
     # The same core built as a generic one: GAME_PACKAGE, load() requires the
     # fixture package (tests/fake_package.txt). Its sidecar has no [title]: a
@@ -129,7 +148,7 @@ if(RETRO_RUNTIME_TOOLS)
     set_target_properties(rcore_fake_pkg_core PROPERTIES PREFIX "" OUTPUT_NAME fake_pkg_core
                           C_VISIBILITY_PRESET hidden)
     file(GENERATE OUTPUT $<TARGET_FILE_DIR:rcore_fake_pkg_core>/fake_pkg_core.rcore.toml CONTENT
-"# Written by CMake for the rcore_fake_pkg_core test fixture.\n\n[core]\nabi_major       = 0\ndraft_revision  = 5\nid              = \"fake_pkg\"\nversion         = \"1.0\"\nlibrary         = \"$<TARGET_FILE_NAME:rcore_fake_pkg_core>\"\nplatforms       = [\"test\"]\ncapabilities    = [\"run_frame\", \"game_package\"]\n\n[build]\nengine_commit   = \"\"\nengine_dirty    = false\ntoolchain       = \"\"\ngenerated_utc   = \"\"\n")
+"# Written by CMake for the rcore_fake_pkg_core test fixture.\n\n[core]\nabi_major       = 0\ndraft_revision  = 5\nid              = \"fake_pkg\"\nversion         = \"1.0\"\nlibrary         = \"$<TARGET_FILE_NAME:rcore_fake_pkg_core>\"\nplatforms       = [\"test\"]\ncapabilities    = [\"run_frame\", \"savestate\", \"game_package\"]\n\n[build]\nengine_commit   = \"\"\nengine_dirty    = false\ntoolchain       = \"\"\ngenerated_utc   = \"\"\n")
 
     enable_testing()
     # Headless: the runner loads the fake core, checks its sidecar, runs 10
@@ -168,6 +187,23 @@ if(RETRO_RUNTIME_TOOLS)
                 -DROM=${CMAKE_CURRENT_SOURCE_DIR}/LICENSE
                 -DOUT=${CMAKE_CURRENT_BINARY_DIR}/test-crash
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/link_crash_test.cmake)
+    # Savestates: saved and loaded over the link, refused by the load rule,
+    # and read by headless --load-state (tests/state_test.cmake).
+    add_test(NAME link_savestates
+        COMMAND ${CMAKE_COMMAND}
+                "-DEMULATOR=${CMAKE_CROSSCOMPILING_EMULATOR}"
+                -DLINK_TEST=$<TARGET_FILE:retro-core-link-test>
+                -DRUNNER=$<TARGET_FILE:retro-core-runner>
+                -DCORE=$<TARGET_FILE:rcore_fake_core>
+                -DROM=${CMAKE_CURRENT_SOURCE_DIR}/LICENSE
+                -DOTHER_ROM=${CMAKE_CURRENT_SOURCE_DIR}/README.md
+                -DOUT=${CMAKE_CURRENT_BINARY_DIR}/test-states
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/state_test.cmake)
+    # The overlay and the envelope, without a window or a core.
+    add_executable(retro-overlay-test tests/overlay_test.cpp)
+    target_link_libraries(retro-overlay-test PRIVATE retro_overlay retro_state)
+    add_test(NAME overlay COMMAND retro-overlay-test ${CMAKE_CURRENT_BINARY_DIR}/test-overlay)
+    set_tests_properties(overlay PROPERTIES PASS_REGULAR_EXPRESSION "overlay-test: ok")
     # Game packages: fake_pkg_core with the fixture package, headless and over
     # the link; and the refusals (no --package for a package core, --package
     # for a plain one, [title] in a package core's sidecar).

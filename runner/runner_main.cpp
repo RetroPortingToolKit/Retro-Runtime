@@ -52,6 +52,7 @@
 #include "runner_link.hpp"
 #include "runtime_version.h"
 #include "sha256.hpp"
+#include "state_keeper.hpp"
 #include "transport.hpp"
 
 #include <cinttypes>
@@ -450,6 +451,7 @@ int main(int argc, char** argv) {
     // are the core's, read before load, and a package reaches a core only
     // through load(). So a package core describes itself without one.
     const bool wants_package = (info.capabilities & RCORE_CAP_GAME_PACKAGE) != 0;
+    std::string pkg_sha;
     if (wants_package && package.empty() && !describe) {
         die(std::string("core '") + info.core_id +
             "' declares game_package: --package <library> (the title's generated code) is required");
@@ -465,7 +467,7 @@ int main(int argc, char** argv) {
         const fs::path pkg = retro::corelink::utf8_path(package);
         std::error_code pec;
         if (!fs::is_regular_file(pkg, pec)) die("--package " + package + ": not a file");
-        const std::string pkg_sha = file_sha256_hex(pkg);
+        pkg_sha = file_sha256_hex(pkg);
         if (pkg_sha.empty()) die("--package " + package + ": unreadable");
         if (!describe) std::printf("package: %s sha256 %s\n", package.c_str(), pkg_sha.c_str());
     }
@@ -486,6 +488,7 @@ int main(int argc, char** argv) {
         LinkArgs la;
         la.rom = rom;
         la.package = package;
+        la.package_sha256 = pkg_sha;
         la.title_dir = title_dir;
         la.out = out;
         la.gl = gl;
@@ -560,13 +563,17 @@ int main(int argc, char** argv) {
     }
 
     if (load_state) {
-        std::ifstream in(*load_state, std::ios::binary);
-        const std::vector<char> bytes((std::istreambuf_iterator<char>(in)), {});
-        if (!in && bytes.empty()) die(load_state->string() + ": unreadable");
-        if (!core.api->unserialize ||
-            core.api->unserialize(bytes.data(), bytes.size()) != RCORE_OK) {
-            die("unserialize " + load_state->string() + " failed");
+        // An envelope is checked by the load rule; a bare state (what n64lle's
+        // gates write) goes to the core as it always did.
+        StateKeeper keeper(core, session, rom, pkg_sha, bindings);
+        std::uint64_t bytes = 0;
+        std::string why;
+        if (!keeper.load(*load_state, true, &bytes, &why)) {
+            die("--load-state " + load_state->string() + ": " + why);
         }
+        std::printf("state: loaded %s (%s, %llu bytes)\n", load_state->string().c_str(),
+                    retro::state::is_envelope(*load_state) ? "envelope" : "bare",
+                    static_cast<unsigned long long>(bytes));
     }
 
     // ---- run --------------------------------------------------------------

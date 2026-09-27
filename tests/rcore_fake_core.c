@@ -8,6 +8,12 @@
  * frame k writes k & 0xff at offset k % 64. So after N frames the save is
  * known exactly, whichever host held it.
  *
+ * It declares SAVESTATE: its state is 12 bytes, "FAKE" and the frame count
+ * (little-endian u64). Frame k's picture is k & 0xff everywhere, so after a
+ * state saved at frame K is loaded, the next picture is K+1 -- a host can see
+ * a load land without reading anything but pixels. unserialize() refuses
+ * anything else with RCORE_ERR_CONTENT, touching nothing.
+ *
  * FAKE_CORE_CRASH_AT=N (an instrument knob) makes frame N kill the process
  * outright, with no unload: a crash, as far as the host can tell. The host
  * link must still write the save as frames 1..N-1 left it.
@@ -51,11 +57,11 @@ static rcore_save_region k_regions[1];
 
 #if defined(FAKE_GAME_PACKAGE)
 #  define FAKE_ID "fake_pkg"
-#  define FAKE_CAPS (RCORE_CAP_RUN_FRAME | RCORE_CAP_GAME_PACKAGE)
+#  define FAKE_CAPS (RCORE_CAP_RUN_FRAME | RCORE_CAP_SAVESTATE | RCORE_CAP_GAME_PACKAGE)
 #  define FAKE_PACKAGE_MAGIC "rcore fake game package"
 #else
 #  define FAKE_ID "fake"
-#  define FAKE_CAPS RCORE_CAP_RUN_FRAME
+#  define FAKE_CAPS (RCORE_CAP_RUN_FRAME | RCORE_CAP_SAVESTATE)
 #endif
 
 static const rcore_core_info k_info = {
@@ -179,6 +185,32 @@ static rcore_result run_frame(void) {
     return RCORE_OK;
 }
 
+#define STATE_SIZE 12u
+
+static uint64_t state_size(void) { return STATE_SIZE; }
+
+static rcore_result serialize(void* out, uint64_t size) {
+    unsigned char* p = (unsigned char*)out;
+    int i;
+    if (!out || size < STATE_SIZE) return RCORE_ERR_INTERNAL;
+    memcpy(p, "FAKE", 4);
+    for (i = 0; i < 8; ++i) p[4 + i] = (unsigned char)(g_frames >> (8 * i));
+    return RCORE_OK;
+}
+
+static rcore_result unserialize(const void* in, uint64_t size) {
+    const unsigned char* p = (const unsigned char*)in;
+    unsigned long long frames = 0;
+    int i;
+    if (!in || size != STATE_SIZE || memcmp(p, "FAKE", 4) != 0) {
+        g_host->log(g_host->host_ctx, RCORE_LOG_ERROR, "FAKE_STATE refused: not a fake state");
+        return RCORE_ERR_CONTENT;
+    }
+    for (i = 7; i >= 0; --i) frames = (frames << 8) | p[4 + i];
+    g_frames = frames;
+    return RCORE_OK;
+}
+
 static void unload(void) {
     char line[64];
     snprintf(line, sizeof line, "FAKE_DONE frames=%llu", g_frames);
@@ -189,7 +221,7 @@ static void deinit(void) {}
 
 static const rcore_core_api k_api = {
     sizeof(rcore_core_api), 0, &k_info, opts, descs, init, load, run_frame, NULL,
-    NULL, NULL, NULL, NULL, unload, deinit,
+    NULL, state_size, serialize, unserialize, unload, deinit,
 };
 
 RCORE_EXPORT const rcore_core_api* rcore_entry(uint32_t host_abi_major) {

@@ -149,6 +149,12 @@ One shared region per session, created by the host and inherited by the runner
 | Events | runner → host | always-on ring of misses, bridges, faults, log lines |
 | State | runner ↔ host | savestate transfer buffer |
 
+> **Superseded, 2026-09-26** (`CORE_LINK.md` 1.1, `OVERLAY.md`): there is no
+> State block. The hub names a file, and the runner serializes into it (or
+> checks it and unserializes), wrapped in the envelope. That is the only place
+> every identity the load rule needs is at hand. The core's bytes never cross
+> the link.
+
 Wake-ups use an eventfd / Windows event pair; nothing polls with sleeps.
 
 **Pause** is the host withholding the grant: a call-per-frame core is simply not
@@ -192,3 +198,10 @@ lockstep instead.
 3. Save-state compatibility across core updates within one ABI version.
 4. Hotkey layout and the overlay's controller binding when a game uses every
    button.
+   - *Where it stands, 2026-09-26, not a ruling:* the hub binds F3 FPS,
+     Tab turbo (held), +/- volume, F7 save states, and Esc/F1/Guide the quick
+     menu (`OVERLAY.md`).
+   - On a pad only Guide and the SELECT + R1 chord are taken. The chord is
+     the one psxrecomp, snesrecomp and n64lle already share.
+   - A game that uses SELECT + R1 together would still open the browser, so
+     the question stays open.

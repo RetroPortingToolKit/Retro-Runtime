@@ -118,7 +118,23 @@ void sha256_final(Sha256Ctx& ctx, uint8_t digest[32]) {
         digest[i] = uint8_t((ctx.state[i >> 2] >> ((3 - (i & 3)) * 8)) & 0xff);
 }
 
+std::string digest_hex(const uint8_t digest[32]) {
+    std::ostringstream oss;
+    for (int i = 0; i < 32; ++i)
+        oss << std::hex << std::nouppercase << std::setw(2) << std::setfill('0') << int(digest[i]);
+    return oss.str();
+}
+
 } // namespace
+
+std::string sha256_hex(const void* data, std::size_t size) {
+    Sha256Ctx ctx;
+    sha256_init(ctx);
+    if (size) sha256_update(ctx, static_cast<const uint8_t*>(data), size);
+    uint8_t digest[32];
+    sha256_final(ctx, digest);
+    return digest_hex(digest);
+}
 
 std::string file_sha256_hex(const std::filesystem::path& path) {
     std::ifstream in(path, std::ios::binary);
@@ -133,10 +149,7 @@ std::string file_sha256_hex(const std::filesystem::path& path) {
     }
     uint8_t digest[32];
     sha256_final(ctx, digest);
-    std::ostringstream oss;
-    for (uint8_t b : digest)
-        oss << std::hex << std::nouppercase << std::setw(2) << std::setfill('0') << int(b);
-    return oss.str();
+    return digest_hex(digest);
 }
 
 } // namespace retro::runner

@@ -3,9 +3,14 @@
 // artifacts are byte-identical to `retro-core-runner` headless and to
 // n64lle's rcore_probe on the same core and scenario (docs/CORE_LINK.md).
 //
-// Same flags as headless mode (a subset: no --replay-at, which needs the
-// savestate envelope; --package included), plus --runner <path to
-// retro-core-runner>.
+// Same flags as headless mode (a subset: no --replay-at; --package included),
+// plus --runner <path to retro-core-runner>, and savestates the way a host's
+// menu takes them (link 1.1):
+//   --state-save-at K:PATH   after frame K, save an envelope to PATH
+//   --state-load-at K:PATH   after frame K, load the envelope at PATH
+// Each prints one `state:` line with the runner's answer. The last picture's
+// first byte is printed (`picture:`): the fake core paints frame k as k & 0xff,
+// so it shows where a load landed.
 // Outputs in --out: core.log, events.tsv and state_hash.tsv come from the
 // runner's session dir, which is --out; shot.ppm is the last picture taken
 // from shared memory; summary.txt is grepped from core.log.
@@ -17,6 +22,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -66,6 +72,18 @@ int main(int argc, char** argv) {
     std::uint64_t frames = 60;
     bool seat0 = true;
     std::vector<std::pair<std::uint64_t, std::uint32_t>> script;
+    struct StateOp {
+        std::uint64_t at;
+        bool save;
+        std::string path;
+    };
+    std::vector<StateOp> state_ops;
+    auto state_op = [&](const std::string& v, bool save) {
+        const auto colon = v.find(':');
+        if (colon == std::string::npos) die("--state-save-at / --state-load-at K:PATH");
+        state_ops.push_back({std::strtoull(v.substr(0, colon).c_str(), nullptr, 10), save,
+                             v.substr(colon + 1)});
+    };
     for (int i = 1; i < argc; ++i) {
         const std::string a = args[i];
         auto val = [&]() -> std::string {
@@ -121,6 +139,10 @@ int main(int argc, char** argv) {
                 if (comma == std::string::npos) break;
                 start = comma + 1;
             }
+        } else if (a == "--state-save-at") {
+            state_op(val(), true);
+        } else if (a == "--state-load-at") {
+            state_op(val(), false);
         } else if (a == "--replay-at") {
             die("--replay-at: not over the link yet (needs the savestate envelope)");
         } else {
@@ -172,6 +194,26 @@ int main(int argc, char** argv) {
         std::int16_t sink[4096];
         while (link.drain_audio(sink, 2048)) {
         }
+        for (const StateOp& op : state_ops) {
+            if (op.at != k || !ok) continue;
+            const bool sent = op.save ? link.request_save_state(utf8_path(op.path))
+                                      : link.request_load_state(utf8_path(op.path));
+            if (!sent) {
+                std::printf("state: %s at frame %llu not sent (link %u.%u, core %s savestate)\n",
+                            op.save ? "save" : "load", static_cast<unsigned long long>(k),
+                            kProtocolMajor, link.identity().protocol_minor,
+                            (link.identity().capabilities & RCORE_CAP_SAVESTATE) ? "declares"
+                                                                                 : "lacks");
+                continue;
+            }
+            std::optional<StateResult> r;
+            while (!(r = link.take_state_result())) link.pump(100);
+            std::printf("state: %s at frame %llu %s%s%s\n", op.save ? "save" : "load",
+                        static_cast<unsigned long long>(k), r->ok ? "ok" : "failed",
+                        r->ok ? (" (" + std::to_string(r->bytes) + " bytes)").c_str() : ": ",
+                        r->ok ? "" : r->detail.c_str());
+            if (link.state() != LinkState::Ready) ok = false;
+        }
     }
     for (const LinkLog& l : link.logs) {
         if (l.level <= RCORE_LOG_WARN) std::fprintf(stderr, "core[%u]: %s\n", l.level, l.text.c_str());
@@ -211,6 +253,9 @@ int main(int argc, char** argv) {
                 sm << msg << '\n';
             }
         }
+    }
+    if (const FrameInfo* f = link.frame_info(); f && f->width && link.frame_pixels()) {
+        std::printf("picture: first byte %u\n", unsigned(link.frame_pixels()[0]));
     }
     std::printf("link-test: %llu frame(s) granted and done, runner exit %d, %u fault(s)\n",
                 static_cast<unsigned long long>(link.frames_done()), link.exit_code(), faults);
