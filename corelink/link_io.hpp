@@ -25,11 +25,20 @@ inline bool packet_type(const std::vector<unsigned char>& buf, Msg& out) {
     return true;
 }
 
-// Copies a packet into a message struct when the size matches exactly.
+// Copies a packet into a message struct. The minor-version rule
+// (link_protocol.hpp): a newer peer may have appended fields, so a longer
+// packet is read and its tail ignored; an older peer may not have sent fields
+// this side appended, so a packet down to `min_size` -- the message's size
+// before its first appended field -- is read and the rest zeroed. No message
+// has grown yet, so every reader passes sizeof(M).
+//
+// A 1.0 peer still demands the exact 1.0 size. A message that grows must
+// therefore be sent at its old size to a session speaking an older minor.
 template <typename M>
-bool as_msg(const std::vector<unsigned char>& buf, M& out) {
-    if (buf.size() != sizeof(M)) return false;
-    std::memcpy(&out, buf.data(), sizeof(M));
+bool as_msg(const std::vector<unsigned char>& buf, M& out, std::size_t min_size = sizeof(M)) {
+    if (buf.size() < min_size || min_size < sizeof(MsgHeader)) return false;
+    std::memset(&out, 0, sizeof(M));
+    std::memcpy(&out, buf.data(), buf.size() < sizeof(M) ? buf.size() : sizeof(M));
     return true;
 }
 

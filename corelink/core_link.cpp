@@ -188,6 +188,18 @@ void CoreLink::handle_packet(const std::vector<unsigned char>& buf,
             if (as_msg(buf, m)) exit_reason_ = m.reason;
             break;
         }
+        case Msg::StateDone: {
+            StateDoneMsg m{};
+            if (!as_msg(buf, m) || !state_pending_) break;
+            m.detail[sizeof m.detail - 1] = '\0';
+            StateResult r = state_request_;
+            r.ok = m.ok != 0;
+            r.bytes = m.bytes;
+            r.detail = m.detail;
+            state_result_ = r;
+            state_pending_ = false;
+            break;
+        }
         default:
             break;
     }
@@ -203,6 +215,37 @@ bool CoreLink::grant(const rcore_pad pads[RCORE_MAX_SEATS]) {
     ++granted_;
     ++outstanding_;
     return true;
+}
+
+bool CoreLink::states_supported() const {
+    return state_ == LinkState::Ready && identity_.protocol_minor >= 1 &&
+           (identity_.capabilities & RCORE_CAP_SAVESTATE);
+}
+
+bool CoreLink::request_state(Msg type, const fs::path& path) {
+    if (!can_request_state()) return false;
+    StateRequestMsg m{};
+    m.h.type = type;
+    m.frame_number = done_;
+    const std::string p = path_utf8(path);
+    if (p.size() >= sizeof m.path) return false;
+    std::memcpy(m.path, p.c_str(), p.size() + 1);
+    if (!send_msg(channel_, m)) return false;
+    state_pending_ = true;
+    state_request_ = StateResult{};
+    state_request_.save = type == Msg::SaveState;
+    state_request_.path = path;
+    state_result_.reset();
+    return true;
+}
+
+bool CoreLink::request_save_state(const fs::path& path) { return request_state(Msg::SaveState, path); }
+bool CoreLink::request_load_state(const fs::path& path) { return request_state(Msg::LoadState, path); }
+
+std::optional<StateResult> CoreLink::take_state_result() {
+    std::optional<StateResult> r;
+    r.swap(state_result_);
+    return r;
 }
 
 bool CoreLink::take_frame() {
@@ -275,6 +318,13 @@ void CoreLink::on_ended(int code) {
     exit_code_ = code;
     state_ = LinkState::Ended;
     outstanding_ = 0;
+    if (state_pending_) {
+        StateResult r = state_request_;
+        r.ok = false;
+        r.detail = "the runner ended before it answered";
+        state_result_ = r;
+        state_pending_ = false;
+    }
     persist_saves(); // the hub's mappings survive the runner
 }
 
