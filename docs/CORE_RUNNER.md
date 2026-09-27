@@ -52,6 +52,20 @@ This page covers what exists and how it is checked.
    (`--core --package --rom --title-dir --out --frames --load-state --tpak1-rom
    --tpak1-save --tpak1-rtc --gl --strict --no-seats --replay-at --opt
    --input-script --list-options`).
+5. **Savestates** (`runner/state_keeper.*`, 2026-09-26). The runner writes
+   and checks the savestate envelope (`OVERLAY.md`, `CORE_ABI.md`
+   "Savestates"). It holds every identity the load rule compares: the core's
+   hash, the package's, the content's, the accessories', and the NETPLAY
+   options.
+   - **Link mode** serves 1.1's `SaveState` / `LoadState` between frames
+     (`CORE_LINK.md`). It logs `state: save|load <path>: ok, N bytes` or the
+     reason to `runner.log`. It hashes the content on a background thread
+     from the start, so the first save does not wait for it.
+   - **`--load-state`**, headless and at link start, checks an envelope by
+     the load rule. A refusal is exit 2, naming the first mismatch. A file
+     without the envelope's magic is a bare core state, as n64lle's gates
+     write them, and goes to the core unchecked as before. Headless prints
+     `state: loaded <path> (envelope|bare, N bytes)`.
 
 `--version` prints the release version, commit, link protocol and rcore ABI
 compiled in, whether `--gl` is available, and `game_package 1` (this runner
