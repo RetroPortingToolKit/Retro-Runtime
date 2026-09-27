@@ -162,7 +162,7 @@ if(RETRO_RUNTIME_TOOLS)
     # --version: what release packaging and hosts read back from the binary.
     add_test(NAME runner_version COMMAND retro-core-runner --version)
     set_tests_properties(runner_version PROPERTIES PASS_REGULAR_EXPRESSION
-        "version ${RETRO_RUNTIME_VERSION}\ncommit [^\n]+\nlink_protocol [0-9]+\\.[0-9]+\n.*gl [01]\ngame_package 1\n")
+        "version ${RETRO_RUNTIME_VERSION}\ncommit [^\n]+\nlink_protocol [0-9]+\\.[0-9]+\n.*gl [01]\ngame_package 1\ndescribe 1\n")
     # Link: the same, driven through retro_corelink the way a host does.
     add_test(NAME link_fake_core
         COMMAND retro-core-link-test --runner $<TARGET_FILE:retro-core-runner>
@@ -174,7 +174,7 @@ if(RETRO_RUNTIME_TOOLS)
     # probe_runner: what a host reads to choose and verify a runner.
     add_test(NAME runner_probe COMMAND retro-core-link-test --probe $<TARGET_FILE:retro-core-runner>)
     set_tests_properties(runner_probe PROPERTIES PASS_REGULAR_EXPRESSION
-        "probe: version ${RETRO_RUNTIME_VERSION}, link [0-9]+\\.[0-9]+, rcore ABI [0-9]+, compatible, game_package 1")
+        "probe: version ${RETRO_RUNTIME_VERSION}, link [0-9]+\\.[0-9]+, rcore ABI [0-9]+, compatible, game_package 1, describe 1")
     # A crash mid-session: the runner dies at frame 5 with no unload. The hub
     # must see it end and still write the save as frames 1-4 left it -- the
     # save memory is the hub's (docs/CORE_LINK.md).
@@ -220,5 +220,18 @@ if(RETRO_RUNTIME_TOOLS)
                     -DROM=${CMAKE_CURRENT_SOURCE_DIR}/LICENSE
                     -DOUT=${CMAKE_CURRENT_BINARY_DIR}/test-package-${_case}
                     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/package_test.cmake)
+    endforeach()
+    # --describe: the fake cores' declarations as TAB records, without --rom;
+    # and the refusals (--package for a plain core, a core that is not there).
+    foreach(_case plain package package_none unwanted no_core)
+        add_test(NAME runner_describe_${_case}
+            COMMAND ${CMAKE_COMMAND}
+                    "-DEMULATOR=${CMAKE_CROSSCOMPILING_EMULATOR}"
+                    -DCASE=${_case}
+                    -DRUNNER=$<TARGET_FILE:retro-core-runner>
+                    -DPKG_CORE=$<TARGET_FILE:rcore_fake_pkg_core>
+                    -DPLAIN_CORE=$<TARGET_FILE:rcore_fake_core>
+                    -DPACKAGE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fake_package.txt
+                    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/describe_test.cmake)
     endforeach()
 endif()

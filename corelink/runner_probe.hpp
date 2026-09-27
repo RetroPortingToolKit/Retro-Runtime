@@ -22,6 +22,9 @@ struct RunnerVersion {
     // 1 when the runner takes --package (GAME_PACKAGE cores); 0 for a runner
     // from before it did, which prints no game_package line.
     std::uint32_t game_package = 0;
+    // 1 when the runner answers --describe (a core's declared options and
+    // inputs, no ROM; docs/CORE_RUNNER.md); 0 for a runner from before it.
+    std::uint32_t describe = 0;
     // Whether this host can drive it: the link major and the rcore ABI major
     // are this host's own.
     bool compatible() const {

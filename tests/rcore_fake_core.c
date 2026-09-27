@@ -18,6 +18,11 @@
  * outright, with no unload: a crash, as far as the host can tell. The host
  * link must still write the save as frames 1..N-1 left it.
  *
+ * It declares four options and three input descriptors that it never reads:
+ * they are there for --describe (tests/describe_test.cmake), so every option
+ * type, every flag, a NULL default and description, and a TAB, LF, CR and
+ * backslash inside a field are all exercised.
+ *
  * Built with FAKE_GAME_PACKAGE it is fake_pkg_core: core id "fake_pkg", it
  * also declares GAME_PACKAGE, and load() requires package_path to name a
  * readable file whose first line is FAKE_PACKAGE_MAGIC (tests/fake_package.txt),
@@ -64,8 +69,34 @@ static const rcore_core_info k_info = {
     FAKE_ID, "1.0", "test", FAKE_CAPS, NULL,
 };
 
-static const rcore_option* opts(uint32_t* count) { *count = 0; return NULL; }
-static const rcore_input_descriptor* descs(uint32_t* count) { *count = 0; return NULL; }
+static const char* const k_mode_values[] = {"fast", "accurate", "tab\there", NULL};
+
+static const rcore_option k_options[] = {
+    {sizeof(rcore_option), RCORE_OPT_ENUM, RCORE_OPT_FLAG_RESTART | RCORE_OPT_FLAG_NETPLAY, 0,
+     "video.mode", "Video mode", "Line one\nline two\twith a back\\slash", "fast",
+     k_mode_values, 0, 0},
+    {sizeof(rcore_option), RCORE_OPT_BOOL, 0, 0, "audio.mute", "Mute", NULL, "0", NULL, 0, 0},
+    {sizeof(rcore_option), RCORE_OPT_INT, RCORE_OPT_FLAG_DEVELOPER, 0, "cpu.overclock",
+     "Overclock", "Percent over stock", NULL, NULL, -5, 1000000000000LL},
+    {sizeof(rcore_option), RCORE_OPT_STRING,
+     RCORE_OPT_FLAG_RESTART | RCORE_OPT_FLAG_NETPLAY | RCORE_OPT_FLAG_DEVELOPER, 0,
+     "debug.trace", "Trace\rfile", NULL, NULL, NULL, 0, 0},
+};
+
+static const rcore_input_descriptor k_inputs[] = {
+    {sizeof(rcore_input_descriptor), RCORE_PAD_SOUTH, 0, 0, "A"},
+    {sizeof(rcore_input_descriptor), 0, RCORE_AXIS_RX + 1, -1, "C-Left"},
+    {sizeof(rcore_input_descriptor), 0, RCORE_AXIS_LX + 1, 0, "Stick"},
+};
+
+static const rcore_option* opts(uint32_t* count) {
+    *count = sizeof k_options / sizeof k_options[0];
+    return k_options;
+}
+static const rcore_input_descriptor* descs(uint32_t* count) {
+    *count = sizeof k_inputs / sizeof k_inputs[0];
+    return k_inputs;
+}
 
 static rcore_result init(const rcore_host_api* host, const rcore_init_params* params) {
     (void)params;
