@@ -28,7 +28,7 @@ must keep all of them:
 
 | Property | Why it is load-bearing |
 |---|---|
-| One message per packet, with the whole packet or nothing | `as_msg` copies exact sizes; a torn message is a malformed session |
+| One message per packet, with the whole packet or nothing | `as_msg` reads whole packets (since 1.1, a longer one's tail is ignored); a torn message is a malformed session |
 | Handles travel with the message that names them | `SaveRegions` carries one memory handle per region, in order |
 | **The hub sees EOF when the runner dies**, however it dies | The only way a hub learns of a crash mid-frame; saves are written on it |
 | The shared region and the save memory are the **hub's** memory | A runner crash cannot lose the picture, the queued audio or a save |
@@ -281,6 +281,12 @@ Linux (`CMakeLists.txt:380`). It must build on Windows and macOS once
 
   This design adds no fields, so it does not depend on the fix. It must land
   before the first minor bump. Filed at the claim site in `CORE_LINK.md`.
+
+  **Resolved 2026-09-26, with 1.1** (the first minor bump): `as_msg` now
+  ignores a longer packet's tail and zero-fills a shorter one down to a
+  message's pre-append size. A message that grows must still be sent at its old
+  size to a 1.0 peer. 1.1 grows none; it adds message types
+  (`CORE_LINK.md`, "Versioning").
 - `CORE_LINK.md` names `src/corelink/`, `src/runner/` and `src/hub/`. Since the
   split they are `corelink/`, `runner/`, and Retro Launcher's `src/hub/`.
 

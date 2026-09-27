@@ -312,6 +312,11 @@ proves its states survive rebuilds with the same id. Without that gate, leave it
 NULL and accept that core updates invalidate states. Stating otherwise is a
 claim with nothing enforcing it.
 
+**Implemented 2026-09-26** as `state/state_envelope.*`. The runner writes and
+checks it (`runner/state_keeper.*`); the hub lists it (`OVERLAY.md`). The
+thumbnail is inside the envelope, not a sidecar, and the load rule never
+reads it.
+
 **Rollback netplay uses no envelope.** Rollback states live in memory, inside
 one session whose peers already matched on the full identity at session start.
 

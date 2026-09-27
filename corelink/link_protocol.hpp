@@ -32,7 +32,7 @@
 namespace retro::corelink {
 
 constexpr std::uint32_t kProtocolMajor = 1;
-constexpr std::uint32_t kProtocolMinor = 0;
+constexpr std::uint32_t kProtocolMinor = 1; // 1.1: savestates (SaveState / LoadState / StateDone)
 constexpr char kMagic[8] = {'R', 'C', 'L', 'I', 'N', 'K', '1', '\0'};
 
 // Frame slots big enough for any console this contract hosts at 1x: the
@@ -116,10 +116,13 @@ enum class Msg : std::uint32_t {
     Log = 5,         // a log() line at WARN or above (all lines go to core.log)
     Event = 6,       // a report(): BRIDGE / DISPATCH_MISS / FAULT
     Exiting = 7,     // the runner is stopping on purpose; the reason follows
+    StateDone = 8,   // 1.1: how the last SaveState / LoadState went
     // hub -> runner
     SavesFilled = 64, // every region filled from its file; the seats at power-on
     Grant = 65,       // run exactly one frame, with these pads
     Quit = 66,        // unload, deinit, exit 0
+    SaveState = 67,   // 1.1: serialize now, into an envelope at this path
+    LoadState = 68,   // 1.1: check the envelope at this path, then unserialize
 };
 
 struct MsgHeader {
@@ -201,9 +204,29 @@ struct EmptyMsg {
     MsgHeader h;
 };
 
-constexpr std::size_t kMaxMsgSize = sizeof(SaveRegionsMsg) > sizeof(LogMsg)
-                                        ? sizeof(SaveRegionsMsg)
-                                        : sizeof(LogMsg);
+// 1.1. Savestates, between frames: the hub sends one only while no grant is
+// outstanding, and grants nothing until StateDone. The RUNNER writes and
+// checks the envelope (state/state_envelope.hpp, docs/CORE_ABI.md
+// "Savestates"): it holds every identity the load rule compares. The path is
+// the hub's choice, UTF-8.
+struct StateRequestMsg {
+    MsgHeader h;          // SaveState or LoadState
+    std::uint64_t frame_number; // frames done so far, recorded in the envelope
+    char path[1024];
+};
+
+struct StateDoneMsg {
+    MsgHeader h;
+    Msg request;          // SaveState or LoadState
+    std::int32_t ok;      // 1 = written / loaded; 0 = refused or failed, see detail
+    std::uint64_t bytes;  // the core's state size
+    char detail[512];     // why not, naming both values (the load rule's words)
+};
+
+constexpr std::size_t kMaxMsgSize = sizeof(SaveRegionsMsg); // the largest message
+static_assert(kMaxMsgSize >= sizeof(LogMsg) && kMaxMsgSize >= sizeof(StateRequestMsg) &&
+                  kMaxMsgSize >= sizeof(StateDoneMsg) && kMaxMsgSize >= sizeof(EventMsg),
+              "kMaxMsgSize must hold every message");
 
 // ---- the wire layout, pinned ------------------------------------------------
 //
@@ -292,6 +315,17 @@ static_assert(offsetof(GrantMsg, pads) == 16, "GrantMsg::pads");
 static_assert(sizeof(EmptyMsg) == 8 && alignof(EmptyMsg) == 4, "EmptyMsg");
 static_assert(offsetof(EmptyMsg, h) == 0, "EmptyMsg::h");
 static_assert(sizeof(rcore_pad) == 28 && alignof(rcore_pad) == 4, "rcore_pad");
+// 1.1
+static_assert(sizeof(StateRequestMsg) == 1040 && alignof(StateRequestMsg) == 8, "StateRequestMsg");
+static_assert(offsetof(StateRequestMsg, h) == 0, "StateRequestMsg::h");
+static_assert(offsetof(StateRequestMsg, frame_number) == 8, "StateRequestMsg::frame_number");
+static_assert(offsetof(StateRequestMsg, path) == 16, "StateRequestMsg::path");
+static_assert(sizeof(StateDoneMsg) == 536 && alignof(StateDoneMsg) == 8, "StateDoneMsg");
+static_assert(offsetof(StateDoneMsg, h) == 0, "StateDoneMsg::h");
+static_assert(offsetof(StateDoneMsg, request) == 8, "StateDoneMsg::request");
+static_assert(offsetof(StateDoneMsg, ok) == 12, "StateDoneMsg::ok");
+static_assert(offsetof(StateDoneMsg, bytes) == 16, "StateDoneMsg::bytes");
+static_assert(offsetof(StateDoneMsg, detail) == 24, "StateDoneMsg::detail");
 
 
 } // namespace retro::corelink

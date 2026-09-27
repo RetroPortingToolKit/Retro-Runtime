@@ -10,9 +10,11 @@ title's core.
 |---|---|
 | `include/rcore/rcore.h` | The host ↔ core contract. A core is a shared library exporting one symbol, `rcore_entry`. Draft revision 5, `RCORE_ABI_MAJOR 0`. |
 | `corelink/` | The host ↔ runner link: its protocol, and `retro_corelink`, the client a host embeds. |
+| `overlay/` | `retro_overlay`: what a host draws over a running core. It covers FPS, TURBO, the volume meter, toasts and the save-state browser, and looks the same for every core. |
+| `state/` | `retro_state`: the savestate envelope. The runner writes and checks it; hosts list it. |
 | `runner/` | `retro-core-runner`, the child process that loads a core and runs it: headless, or linked to a host. Also `retro_core_support`, the sidecar-manifest reader and core loader hosts use. |
 | `tests/rcore_fake_core.c` | The smallest core, for tests. |
-| `docs/` | `HOST_LIFECYCLE.md` (the design), `CORE_ABI.md` (the contract), `CORE_LINK.md` (the link), `CORE_RUNNER.md` (the runner), `RELEASES.md` (releases and runner updates). |
+| `docs/` | `HOST_LIFECYCLE.md` (the design), `CORE_ABI.md` (the contract), `CORE_LINK.md` (the link), `CORE_RUNNER.md` (the runner), `OVERLAY.md` (the play overlay and savestates), `RELEASES.md` (releases and runner updates). |
 
 ## Build
 
@@ -28,8 +30,8 @@ ctest --test-dir build
   (`docs/LINK_TRANSPORTS.md`); the protocol above it does not.
 
 A host pulls this in with `add_subdirectory()` and links `retro_rcore`,
-`retro_core_support` and `retro_corelink`. A host that already found SDL3 can
-pass `-DRETRO_RUNTIME_SDL3_TARGET=<target>`.
+`retro_core_support`, `retro_corelink` and `retro_overlay`. A host that
+already found SDL3 can pass `-DRETRO_RUNTIME_SDL3_TARGET=<target>`.
 
 ## Releases
 
@@ -52,7 +54,7 @@ Three contracts, each with a major that must match and append-only minors:
 | Contract | Where | Current |
 |---|---|---|
 | rcore ABI | `RCORE_ABI_MAJOR` / `RCORE_DRAFT_REVISION` | 0 (draft), revision 5 |
-| Link protocol | `kProtocolMajor` / `kProtocolMinor` | 1.0 |
+| Link protocol | `kProtocolMajor` / `kProtocolMinor` | 1.1 (savestates) |
 | Sidecar manifest | `abi_major`, `draft_revision` | follows the ABI |
 
 The runner can therefore update separately from hosts and cores:

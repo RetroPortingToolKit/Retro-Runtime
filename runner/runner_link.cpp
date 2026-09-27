@@ -1,6 +1,7 @@
 #include "runner_link.hpp"
 
 #include "../corelink/link_io.hpp"
+#include "state_keeper.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -80,7 +81,19 @@ public:
         info.aspect_den = f.aspect_den;
         info.frame_number = frame_number;
         // Publish: our back becomes middle, and middle's old slot becomes ours.
+        published_ = static_cast<int>(back_);
         back_ = shm_->middle.exchange(back_ | kFresh, std::memory_order_acq_rel) & ~kFresh;
+    }
+
+    // The last published picture, shrunk for a savestate. Between frames that
+    // slot is the middle or the hub's front: nobody writes it until the runner
+    // publishes again, which it is not doing while it answers a request.
+    std::vector<std::uint8_t> thumbnail() const {
+        if (published_ < 0) return {};
+        const FrameInfo& info = shm_->slot[published_];
+        return state::make_thumbnail(base_ + shm_->frames_offset +
+                                         std::size_t(published_) * kFrameSlotBytes,
+                                     info.width, info.height, info.stride);
     }
 
     void audio(const std::int16_t* samples, std::uint32_t n) override {
@@ -121,6 +134,7 @@ private:
     SharedHeader* shm_;
     std::uint8_t* base_;
     std::uint32_t back_ = 2; // the triple buffer's initial back slot
+    int published_ = -1;     // the slot last swapped into middle
     std::ofstream log_, events_;
 };
 
@@ -262,12 +276,17 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
     }
     session.adopt_external_save_regions(regs, nregs, memory);
 
+    StateKeeper keeper(core, session, a.rom, a.package_sha256, bindings);
+    // A core that can save gets its content hashed now, off the core thread,
+    // so the player's first save does not wait on it.
+    if (core.info->capabilities & RCORE_CAP_SAVESTATE) keeper.hash_in_background();
     if (a.load_state) {
-        std::ifstream in(*a.load_state, std::ios::binary);
-        const std::vector<char> bytes((std::istreambuf_iterator<char>(in)), {});
-        if (bytes.empty() || !core.api->unserialize ||
-            core.api->unserialize(bytes.data(), bytes.size()) != RCORE_OK) {
-            return exiting(sock, 2, "unserialize " + a.load_state->string() + " failed");
+        // The launch's own state: an envelope is checked; a bare state, as the
+        // gates write them, goes to the core as it always did.
+        std::uint64_t bytes = 0;
+        std::string why;
+        if (!keeper.load(*a.load_state, true, &bytes, &why)) {
+            return exiting(sock, 2, "--load-state " + a.load_state->string() + ": " + why);
         }
     }
 
@@ -283,6 +302,35 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         Msg t{};
         packet_type(buf, t);
         if (t == Msg::Quit) break;
+        if (t == Msg::SaveState || t == Msg::LoadState) {
+            // 1.1. Between frames by construction: one grant at a time, and
+            // the hub sends a request only when none is outstanding.
+            StateDoneMsg d{};
+            d.h.type = Msg::StateDone;
+            d.request = t;
+            StateRequestMsg r{};
+            std::string why;
+            std::uint64_t bytes = 0;
+            bool ok = false;
+            if (!as_msg(buf, r)) {
+                why = "malformed request";
+            } else {
+                r.path[sizeof r.path - 1] = '\0';
+                const fs::path path = utf8_path(r.path);
+                ok = t == Msg::SaveState
+                         ? keeper.save(path, r.frame_number, sink.thumbnail(), &bytes, &why)
+                         : keeper.load(path, false, &bytes, &why);
+                std::fprintf(stderr, "state: %s %s: %s\n",
+                             t == Msg::SaveState ? "save" : "load", r.path,
+                             ok ? ("ok, " + std::to_string(bytes) + " bytes").c_str()
+                                : why.c_str());
+            }
+            d.ok = ok ? 1 : 0;
+            d.bytes = bytes;
+            copy_str(d.detail, sizeof d.detail, why.c_str());
+            send_msg(sock, d);
+            continue;
+        }
         GrantMsg g{};
         if (t != Msg::Grant || !as_msg(buf, g)) {
             code = exiting(sock, 2, "link: unexpected message from the hub");

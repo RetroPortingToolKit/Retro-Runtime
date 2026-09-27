@@ -52,6 +52,15 @@ struct CoreIdentity {
     std::uint32_t protocol_minor = 0;
 };
 
+// How a SaveState / LoadState went (link 1.1).
+struct StateResult {
+    bool save = false;     // SaveState; else LoadState
+    bool ok = false;
+    fs::path path;
+    std::uint64_t bytes = 0;
+    std::string detail;    // the runner's reason when !ok
+};
+
 struct LinkLog {
     std::uint32_t level;
     std::string text;
@@ -86,11 +95,27 @@ public:
     const CoreIdentity& identity() const { return identity_; }
 
     // One frame, with every seat's pad. Only one grant is outstanding at a
-    // time; can_grant() says whether the previous one has finished.
-    bool can_grant() const { return state_ == LinkState::Ready && outstanding_ == 0; }
+    // time; can_grant() says whether the previous one has finished. Nothing is
+    // granted while a savestate request is outstanding.
+    bool can_grant() const {
+        return state_ == LinkState::Ready && outstanding_ == 0 && !state_pending_;
+    }
     bool grant(const rcore_pad pads[RCORE_MAX_SEATS]);
     std::uint64_t frames_granted() const { return granted_; }
     std::uint64_t frames_done() const { return done_; }
+
+    // Savestates (link 1.1), between frames. The runner writes and checks the
+    // envelope at `path` (docs/CORE_ABI.md, "Savestates"). False without
+    // sending anything when the session cannot: a 1.0 runner, a core without
+    // CAP_SAVESTATE, a grant or another request still outstanding.
+    bool states_supported() const;
+    bool can_request_state() const { return states_supported() && can_grant(); }
+    bool request_save_state(const fs::path& path);
+    bool request_load_state(const fs::path& path);
+    bool state_pending() const { return state_pending_; }
+    // The answer, once, when it has arrived. A runner that ends first
+    // answers with a failure naming that.
+    std::optional<StateResult> take_state_result();
 
     // Swaps in the newest picture if there is one the hub has not taken.
     bool take_frame();
@@ -123,6 +148,7 @@ public:
 
 private:
     void handle_packet(const std::vector<unsigned char>& buf, std::vector<NativeHandle>& handles);
+    bool request_state(Msg type, const fs::path& path);
     void on_ended(int code);
     void reap(int timeout_ms);
 
@@ -146,6 +172,9 @@ private:
     int outstanding_ = 0;
     std::uint32_t front_ = 0; // the triple buffer's initial front slot
     bool have_frame_ = false;
+    bool state_pending_ = false;
+    StateResult state_request_;
+    std::optional<StateResult> state_result_;
     int exit_code_ = 0;
     std::string exit_reason_;
 };
