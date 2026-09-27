@@ -132,7 +132,7 @@ states neither falls back to a fixed 60 Hz.
 ## Direct mode
 
 `retro-hub --run-core <core> [--package <shim>] --rom <image> [--title-dir D]
-[--tpak1-rom GB --tpak1-save SAV] [--opt key=value ...] [--no-gl]` boots
+[--tpakN-rom GB --tpakN-save SAV (N = 1-4)] [--opt key=value ...] [--no-gl]` boots
 straight into the core and exits when the player closes it. This is the shape a
 standalone release takes (`HOST_LIFECYCLE.md` §3). `<core>` is a per-title core
 (`<title>_core.so`) or a generic one with the `game_package` capability (such as
@@ -150,10 +150,15 @@ package; `--title-dir` then defaults to the shim's directory.
   source is logged. With no usable runner, or `--package` and a runner without
   `game_package 1`, the window shows the error and the hub exits 1. A background
   runtime update applies from the next launch, never mid-session.
-- **Menu:** the guide button, Esc or F1 open the paused quick menu (Resume,
+- **Menu:** Esc or F1, or L3 + R3 on a pad, open the paused quick menu (Resume,
   Save states, Show FPS, Volume, Close game). F11 toggles fullscreen.
-- **Overlay** (`OVERLAY.md`): F3 FPS, Tab (held) turbo, +/- volume, F7 or
-  SELECT + R1 save states.
+- **Overlay** (`OVERLAY.md`): F3 FPS, Tab (held) turbo, +/- volume, F7 save
+  states by default. Since 2026-09-27 the hub's hotkeys are the player's to
+  bind (Retro-Launcher's settings page, `play.ini` `[keys]` / `[combos]`), and
+  its pad shortcuts are `Function + <button>`, Function being an input the
+  player assigns per controller (Back by default: some USB pads report Select
+  oddly). Save states are Function + R1; L3 + R3 also opens the menu. The hub
+  keeps SELECT out of the browser's own chord.
 - **Input:**
   - Gamepads fill seats 0–3 in the order SDL lists them.
   - With none attached, the keyboard is port 1: arrows = D-pad, X/Z/C/S = the

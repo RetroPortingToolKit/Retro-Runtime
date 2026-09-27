@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <array>
 #include <map>
 #include <optional>
 #include <string>
@@ -32,7 +33,11 @@ struct LaunchSpec {
     bool strict = false;
     std::map<std::string, std::string> options;
     std::optional<fs::path> load_state;
-    std::string tpak_rom;
+    // Seat N's Transfer Pak cartridge (argv --tpakN-rom), N = 1-4; empty for
+    // a seat without one. The runner must report transfer_pak_seats >= N
+    // (runner_probe.hpp); an older runner takes seat 1 only. Its battery
+    // save is save_files["tpakN"], the MBC3 clock save_files["tpakN.rtc"].
+    std::array<std::string, 4> tpak_roms;
     std::map<std::string, fs::path> save_files; // region id -> file
     // Regions not named above land here as <id>.sav. Empty = only the named
     // ones persist. (Region ids are only known once the core has loaded.)

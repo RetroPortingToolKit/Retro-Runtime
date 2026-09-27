@@ -64,9 +64,10 @@ bool CoreLink::start(const LaunchSpec& spec, std::string* error) {
         args.push_back("--load-state");
         args.push_back(path_utf8(*spec_.load_state));
     }
-    if (!spec_.tpak_rom.empty()) {
-        args.push_back("--tpak1-rom");
-        args.push_back(spec_.tpak_rom);
+    for (std::size_t seat = 0; seat < spec_.tpak_roms.size(); ++seat) {
+        if (spec_.tpak_roms[seat].empty()) continue;
+        args.push_back("--tpak" + std::to_string(seat + 1) + "-rom");
+        args.push_back(spec_.tpak_roms[seat]);
     }
     sp.env = spec_.env;
     sp.log = runner_log();
