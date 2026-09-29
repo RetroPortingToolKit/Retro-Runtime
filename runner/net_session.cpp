@@ -370,6 +370,11 @@ NetSession::Admit NetSession::poll() {
         s.ended = "no peer answered within 30 s";
         return Admit::Stall;
     }
+    if (s.was_running && !running) {
+        // A peer's BYE (or the transport closing) stops the session at once.
+        s.ended = "a player left the match";
+        return Admit::Stall;
+    }
     if (s.was_running && rnet_session_peer_disconnected(s.session, 5000)) {
         s.ended = "a player left the match (no packets for 5 s)";
         return Admit::Stall;
@@ -418,7 +423,7 @@ void NetSession::request_quiesce() {
 }
 
 bool NetSession::drained() const {
-    if (!impl_->drv) return true;
+    if (!impl_->drv) return false;
     const RNetRbQuiesce q = rnet_rb_driver_quiesce_state(impl_->drv);
     return q == RNET_RB_QUIESCE_DRAINED || q == RNET_RB_QUIESCE_TIMED_OUT;
 }

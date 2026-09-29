@@ -665,7 +665,8 @@ int main(int argc, char** argv) {
                     ok_net = quiescing; // a peer leaving after the drain is the end
                     break;
                 }
-                if (quiescing && ns.drained()) break;
+                // Either peer's stop drains the match on both (rb_driver.h).
+                if (ns.drained()) break;
                 ns.wait(2);
                 continue;
             }
@@ -687,7 +688,7 @@ int main(int argc, char** argv) {
                 ns.request_quiesce();
                 quiescing = true;
             }
-            if (quiescing && ns.drained()) break;
+            if (ns.drained()) break;
         }
         const double secs =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();

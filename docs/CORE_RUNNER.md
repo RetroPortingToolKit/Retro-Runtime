@@ -176,9 +176,50 @@ compares stdout byte for byte (`runner_describe_*`,
 `n64lle_core.so` (0.374.0, sidecar beside it): exit 0, 76 options, 16 enum
 values and 16 inputs, every record with its field count.
 
+## Netplay (headless, 2026-09-29)
+
+`runner/net_session.*` binds recomp-net's `rb_driver` once, for every core
+(rev 4; the core's slots map onto `RNetRbHost` as CORE_ABI.md §Netplay
+tables). Built when CMake is given `-DRETRO_RUNTIME_RECOMP_NET_DIR=<recomp-net
+checkout>`; `--version` then says `netplay 1`, otherwise `netplay 0` and every
+`--net-*` flag is refused.
+
+```
+--net-slot N --net-slots N [--net-occupied MASK] [--net-delay N]
+[--net-prediction N] [--net-session ID] --net-epoch UNIX_SECONDS
+--net-bind HOST:PORT [--net-peer HOST:PORT | --net-relay HOST:PORT]
+[--net-content LINE ...]
+```
+
+- **Transport.** Seat 0 hosts: with more than two seats it is recomp-net's
+  LAN hub (the host relays every guest's datagrams to the others), with two
+  a direct pair. Every other seat dials the host (`--net-peer`). With
+  `--net-relay` every peer dials that address instead (the lobby server's
+  relay).
+- **What reaches the core.** `input_get` answers from the published rows,
+  through the core's rev 6 codec (or a generic packing, refused for a core
+  whose inputs ride axes a row cannot carry). `wall_clock_us` is the epoch
+  plus the frame number at a nominal 60 Hz. `RCORE_INIT_NETPLAY` is set.
+- **Identity.** The build fingerprint is the runner's netplay version and the
+  core's sha256; the content fingerprint is the seat count, occupancy, epoch,
+  the ROM's and package's sha256, every NETPLAY option's value, each Transfer
+  Pak's ROM and save sha256, and any `--net-content` line. Each line is logged
+  (`runner_netplay: IDENT content ...`). A difference is refused at sim 0.
+- **The loop** admits one live or one replayed frame at a time (INCREMENTAL):
+  `run_frame` or `run_frame_resim`, then `finish`. After `--frames` live frames
+  it asks the driver to drain; either peer's drain ends the match on both.
+  `NETPLAY_DONE` reports live and replayed frames, episodes, desyncs, the
+  confirmed watermark and `state_hash` at the target frame.
+- **Measured** (n64lle's generic core, Pokemon Stadium, separate processes on
+  loopback, 600 frames): two seats at delay 0, 6 episodes, identical
+  `state_hash` at frame 599, 0 desyncs; a forced-mispredict peer, 198
+  episodes, 0 desyncs; three seats with seat 0 relaying, identical on all
+  three; a different settled epoch refused (`mod_set_mismatch`).
+- **Not built:** netplay through the hub link (`--link` with `--net-*` is
+  refused), NAT traversal, a spectator seat, and play over a real network.
+
 ## Not built yet
 
-- **Netplay** (rev 4: the runner binds recomp-net's `rb_driver`).
 - **The savestate envelope** and its refuse-on-mismatch rule.
 - **Windows and macOS testing on real machines.** Both build and pass the
   ctest suite in CI, and Windows also passes it under Wine. macOS loads a core

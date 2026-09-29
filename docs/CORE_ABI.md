@@ -233,11 +233,12 @@ RAM out of its states. Host-owned save memory is never in `rb_snap_*` or
   hardware. The envelope still records accessory content hashes, so a state is
   refused against a different cartridge.
 
-**n64lle today.** Rollback runs on the unmerged `feat/rollback*` branches,
-binding `rb_driver` inside the SDL harness (`host_netplay.rs`). The SDL-free
-`netplay_rb.rs` is what becomes the core's side of the functions above. It has
-run 2–4 seats over UDP loopback on one machine, never over a real network and
-never with a player. The core still declares no `ROLLBACK`.
+**n64lle today** *(replaced 2026-09-29)*. The generic core declares
+`ROLLBACK` and fills every rev 4 slot and the rev 6 row codec (n64lle branch
+`feat/rcore-rollback`, its `docs/RCORE.md` §9), and retro-core-runner drives
+it (CORE_RUNNER.md, "Netplay"): two and three seats over UDP loopback, as
+separate processes, with identical digests. Never over a real network and
+never with a player.
 
 ## Accessories
 
