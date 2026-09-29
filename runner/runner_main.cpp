@@ -648,8 +648,9 @@ int main(int argc, char** argv) {
         const std::uint64_t target = frames;
         std::uint64_t live = 0;
         bool quiescing = false, ok_net = true;
-        std::uint32_t target_tick = 0;
-        std::uint64_t target_hash = 0;
+        // Each frame's digest as the timeline now stands: a replay of a frame
+        // overwrites its live digest. Printed at one frame every peer reaches.
+        std::map<std::uint32_t, std::uint64_t> tick_hash;
         std::string end;
         const auto t0 = std::chrono::steady_clock::now();
         while (true) {
@@ -681,11 +682,8 @@ int main(int argc, char** argv) {
                 break;
             }
             ns.finish(a);
+            if (core.api->state_hash) tick_hash[ns.tick()] = core.api->state_hash();
             if (a == NetSession::Admit::Live && ++live >= target && !quiescing) {
-                // The digest at exactly the target frame, the same frame on
-                // every peer; the drain that follows runs a few frames more.
-                target_tick = ns.tick();
-                target_hash = core.api->state_hash ? core.api->state_hash() : 0;
                 ns.request_quiesce();
                 quiescing = true;
             }
@@ -694,13 +692,17 @@ int main(int argc, char** argv) {
         const double secs =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         const NetStats st = ns.stats();
+        // A frame both peers ran and the digest chain confirmed.
+        const std::uint32_t at_tick = target > 20 ? static_cast<std::uint32_t>(target - 20) : 0;
+        const auto hit = tick_hash.find(at_tick);
+        const std::uint64_t at_hash = hit != tick_hash.end() ? hit->second : 0;
         std::printf("NETPLAY_DONE seat=%d live=%llu replayed=%llu stalls=%llu episodes=%u "
                     "desyncs=%u rtt_ms=%u confirmed_through=%u at_tick=%u at_hash=%016llx "
                     "secs=%.2f%s%s\n",
                     net.slot, static_cast<unsigned long long>(st.live),
                     static_cast<unsigned long long>(st.replayed),
                     static_cast<unsigned long long>(st.stalls), st.episodes, st.desyncs, st.rtt_ms,
-                    st.confirmed_through, target_tick, static_cast<unsigned long long>(target_hash), secs,
+                    st.confirmed_through, at_tick, static_cast<unsigned long long>(at_hash), secs,
                     end.empty() ? "" : " ended=", end.c_str());
         ns.shutdown();
         core.api->unload();
