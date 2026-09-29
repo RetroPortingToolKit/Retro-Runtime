@@ -324,6 +324,14 @@ void test_envelope(const fs::path& dir) {
     r.core_sha256 = "a rebuild";
     CHECK(state::check_state(promised, r, got).empty());
 
+    // ... and so does the game package's hash: a promising core's own load
+    // check decides whether a state survives a regenerated package. Content
+    // is still compared.
+    r.package_sha256 = "a regenerated package";
+    CHECK(state::check_state(promised, r, got).empty());
+    r.content_sha256 = "r1";
+    CHECK(state::check_state(promised, r, got).find("content SHA-256 differs") == 0);
+
     // A bare state is not an envelope; a truncated one is refused, not trusted.
     const fs::path bare = dir / "bare.state";
     std::ofstream(bare, std::ios::binary) << "raw core bytes";

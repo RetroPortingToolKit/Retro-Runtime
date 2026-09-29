@@ -67,7 +67,7 @@ go-ahead after parity lands. Nothing below is being built yet.
 | Contract point | n64lle today | Fit |
 |---|---|---|
 | Loop ownership | The host drives the engine: `host_main` calls the dispatch loop, which returns at a stop predicate on dispatch-loop boundaries (the VI field in practice) | **`RCORE_CAP_RUN_FRAME` is feasible** without restructuring the engine |
-| Savestate safe point | Taken only at that same dispatch-loop boundary (`docs/SAVESTATES.md`). A load invalidates learned dispatcher state | Fits. States are raw struct bytes with an integrity key, **bound to one build** — so `state_compat_id` stays NULL and the envelope checks the core file hash (§Savestates) |
+| Savestate safe point | Taken only at that same dispatch-loop boundary (`docs/SAVESTATES.md`). A load invalidates learned dispatcher state | Fits. States are raw struct bytes with an integrity key the engine checks on load. *(Amended 2026-09-29: this row said they were bound to one build with `state_compat_id` NULL. n64lle declares `n64lle-engine-checked` since 2026-09-28, owner ruling: its own load check decides, §Savestates.)* |
 | Determinism | The guest is deterministic run to run; the parity gate depends on it. With the async software rasterizer on, RDRAM hashes sampled mid-field race the workers; presented output is still deterministic | `CAP_DETERMINISTIC` holds for the simulation. Any netplay state hash must be sampled at the field boundary, never mid-field |
 | Settings | ~183 knobs, read through `getenv` and the host-config seam `n64_config_get()` | Feasible: move the remaining raw `getenv`s behind the seam, then serve the seam from `option_get` |
 | Input | The SI/PIF model already has four ports; the host feeds each port's pad | Seats map directly |
@@ -296,9 +296,9 @@ mismatch and naming both values:
 
 1. ABI major, core id.
 2. **Build identity.** If the core declares a `state_compat_id`, the ids must
-   match exactly. If it declares none (n64lle today: states are bound to one
-   build), the **core file hashes** must match.
-3. Game package hash, content hash.
+   match exactly. If it declares none, the **core file hashes** must match.
+3. Game package hash — **only for a core that declares no `state_compat_id`**
+   (below) — then content hash.
 4. Accessory bindings, then simulation options.
 5. SHA-256 of the core bytes (a corrupt file).
 
@@ -311,6 +311,17 @@ rolls back to the old core gets it back.
 proves its states survive rebuilds with the same id. Without that gate, leave it
 NULL and accept that core updates invalidate states. Stating otherwise is a
 claim with nothing enforcing it.
+
+**The promise covers the game package too (owner ruling, 2026-09-29).** A game
+package is part of the build that runs, so for a core that declares a
+`state_compat_id` the runner does not compare package hashes: whether a state
+survives a regenerated package is that core's load check to decide, as it is
+for a rebuilt core. Found when regenerating Pokémon Stadium's package for a new
+module ABI refused every save slot, while n64lle's engine loaded the same state
+on the new package. A core with no id keeps the comparison. For n64lle the
+engine's check is its integrity key and restore digest (n64lle
+`docs/SAVESTATES.md`); the "undefined memory" argument above holds only for a
+core with no such check.
 
 **Implemented 2026-09-26** as `state/state_envelope.*`. The runner writes and
 checks it (`runner/state_keeper.*`); the hub lists it (`OVERLAY.md`). The
@@ -358,8 +369,10 @@ first answered that way and every savestate scenario diverged from headless
 3. GPU frames (shared dma-buf / DXGI textures) — a later minor version.
 4. Whether 2 accessory slots per seat covers every platform we care about
    (PSX: one memory card per port plus multitap; N64: one pak per controller).
-5. A gate that would let n64lle declare a `state_compat_id` — that is, states
-   surviving a rebuild — if that is ever wanted.
+5. **Resolved (2026-09-28, owner ruling).** n64lle declares a constant
+   `state_compat_id`; its engine's load check decides (n64lle
+   `docs/evidence/CORE-STATE-COMPAT.md`), and since 2026-09-29 that covers a
+   regenerated game package (§Savestates).
 7. **Resolved (2026-09-25, rev 5).** A core states its frame rate with
    `set_frame_rate` (§Frame rate).
 6. **Resolved (2026-09-24).** n64lle's GL is compute only and its output still

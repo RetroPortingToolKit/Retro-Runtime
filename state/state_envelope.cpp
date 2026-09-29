@@ -313,8 +313,14 @@ std::string check_state(const StateHeader& saved, const StateIdentity& running,
         return differs("core build (SHA-256; this core binds states to its exact file)",
                        s.core_sha256, running.core_sha256);
     }
-    // 3. Game package, content.
-    if (s.package_sha256 != running.package_sha256) {
+    // 3. Game package, content. A core that declares a state_compat_id has
+    // promised that its own load check decides whether a state survives a
+    // rebuild, and a game package is part of that build: comparing its hash
+    // here refused every slot after every package regeneration while the
+    // engine would have loaded them (owner ruling 2026-09-29, CORE_ABI.md
+    // "Savestates"). A core that made no promise keeps the comparison; nothing
+    // else guards it.
+    if (!running.state_compat_id && s.package_sha256 != running.package_sha256) {
         return differs("game package SHA-256", s.package_sha256, running.package_sha256);
     }
     if (s.content_sha256 != running.content_sha256) {

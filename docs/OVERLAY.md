@@ -121,7 +121,8 @@ gives, stops at the first mismatch, and names both values:
 
 1. ABI major, core id.
 2. `state_compat_id` if either side has one, otherwise the core file hash.
-3. Package, then content.
+3. Package (only for a core with no `state_compat_id`: `CORE_ABI.md`
+   "Savestates"), then content.
 4. Accessories, then options.
 5. The bytes' hash (a corrupt file).
 
