@@ -148,14 +148,14 @@ These are the hub's choices, listed here because every core gets them:
 | F3 | show / hide FPS (also a setting: "Show FPS", saved in `<data_dir>/play.ini`) |
 | Tab (held) | turbo; sound is dropped while it runs |
 | + / - (`=` `-` or keypad) | volume, 10% steps, meter on the right (saved in `play.ini`) |
-| F7, or SELECT + R1 | save states |
-| Esc, F1, Guide | the pause menu, which also has Save states, Show FPS and Volume |
+| F7, or SELECT + R1 (Retro-Launcher's hub: Function + R1, rebindable) | save states |
+| Esc, F1 (Retro-Launcher's hub: also L3 + R3 or Function + Start; never Guide, which Steam keeps) | the pause menu, which also has Save states, Show FPS and Volume |
 
 - The recomp-ui family binds FPS to F. In the hub F drives C-Left (the TFGH
   right stick), so FPS is F3.
 - Turbo holds on key events and drops when the window loses focus.
-- Nothing here is bound on a pad except the browser's chord and the existing
-  Guide.
+- Nothing here is bound on a pad except the browser's chord; the hub adds its
+  own pad shortcuts (Function combos, L3 + R3) and leaves Guide alone.
 
 ## How it was checked (2026-09-26)
 
