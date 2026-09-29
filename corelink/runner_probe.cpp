@@ -70,6 +70,9 @@ bool probe_runner(const fs::path& runner, RunnerVersion& out, std::string* error
     if (fields.count("describe") && !num("describe", v.describe)) {
         return fail("--version printed an unreadable describe line");
     }
+    if (fields.count("netplay") && !num("netplay", v.netplay)) {
+        return fail("--version printed an unreadable netplay line");
+    }
     if (fields.count("transfer_pak_seats") && !num("transfer_pak_seats", v.transfer_pak_seats)) {
         return fail("--version printed an unreadable transfer_pak_seats line");
     }
