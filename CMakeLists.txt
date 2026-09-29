@@ -113,7 +113,22 @@ if(RETRO_RUNTIME_TOOLS)
         runner/runner_link.cpp
         runner/host_session.cpp
         runner/state_keeper.cpp
+        runner/net_session.cpp
     )
+    # Netplay (runner/net_session.hpp): recomp-net's episode driver and UDP
+    # transport, compiled in from a checkout when one is named. Without it the
+    # runner answers `netplay 0` and refuses --net-*.
+    set(RETRO_RUNTIME_RECOMP_NET_DIR "" CACHE PATH
+        "recomp-net checkout: build retro-core-runner with netplay")
+    if(RETRO_RUNTIME_RECOMP_NET_DIR)
+        set(RNET_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        set(RNET_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+        set(RNET_ENABLE_ICE OFF CACHE BOOL "" FORCE)
+        add_subdirectory(${RETRO_RUNTIME_RECOMP_NET_DIR} recomp-net EXCLUDE_FROM_ALL)
+        target_link_libraries(retro-core-runner PRIVATE recomp_net)
+        target_compile_definitions(retro-core-runner PRIVATE RETRO_RUNNER_NETPLAY=1)
+        message(STATUS "retro-core-runner: netplay from ${RETRO_RUNTIME_RECOMP_NET_DIR}")
+    endif()
     # Threads: the savestate keeper hashes content off the core thread.
     find_package(Threads REQUIRED)
     target_link_libraries(retro-core-runner PRIVATE retro_core_support retro_corelink retro_state

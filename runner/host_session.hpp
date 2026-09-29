@@ -10,6 +10,7 @@
 #include "core_library.hpp"
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -79,6 +80,19 @@ public:
     // Write every file-backed region back, as a frontend persists saves.
     void persist_save_regions() const;
 
+    // Netplay (net_session.hpp): input_get answers from `source` -- the
+    // published rows -- instead of the Sink, which then only feeds the local
+    // pad into the session.
+    void set_input_source(std::function<void(std::uint32_t, rcore_pad&)> source) {
+        input_source_ = std::move(source);
+    }
+    // Netplay: wall_clock_us becomes a pure function of the session's agreed
+    // epoch and the frame number (rev 4): epoch + tick() frames at 60 Hz.
+    void set_session_clock(std::uint64_t epoch_us, std::function<std::uint64_t()> tick) {
+        clock_epoch_us_ = epoch_us;
+        clock_tick_ = std::move(tick);
+    }
+
 private:
     static HostSession* self(void* ctx) { return static_cast<HostSession*>(ctx); }
 
@@ -102,6 +116,9 @@ private:
     std::map<std::string, std::optional<std::string>> options_;
     std::vector<SaveRegion> regions_;
     void* (*gl_proc_)(const char*) = nullptr;
+    std::function<void(std::uint32_t, rcore_pad&)> input_source_;
+    std::uint64_t clock_epoch_us_ = 0;
+    std::function<std::uint64_t()> clock_tick_;
 };
 
 } // namespace retro::runner

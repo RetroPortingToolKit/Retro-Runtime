@@ -12,6 +12,7 @@ only the shape of the contract and why.
 | Rev | Date | Change |
 |---|---|---|
 | 1 | 2026-09-23 | First draft. |
+| 6 | 2026-09-29 | `net_row_from_pad` / `net_row_to_pad` and `rcore_net_row`: a core's own netplay input row. A row is 16 buttons and one 8-bit stick, and n64lle's C buttons ride `RCORE_AXIS_RX/RY`, so rev 4's "pads need no core hook" did not hold (amended at its claim site in `rcore.h`). Driven by the Direct-mode netplay work (Retro-Launcher `docs/NETPLAY_DIRECT.md`). |
 | 5 | 2026-09-25 | `set_frame_rate(num, den)` on the host table: the nominal frame rate as an exact fraction, stated after `load()` and whenever the guest reprograms its video timing. Closes the pacing gap the hub link found. |
 | 4 | 2026-09-25 | Alex's ruling that the runner owns netplay: `rb_snap_*`, `run_frame_resim` and `state_hash_parts` for `CAP_ROLLBACK`, mapped onto recomp-net's `RNetRbHost`; host `wall_clock_us`, so a clock cartridge stays deterministic. |
 | 3 | 2026-09-24 | From the n64lle rcore session's fit report, with Alex's rulings: lent GL context (`RCORE_CAP_GL_COMPUTE`, `gl_get_proc_address`); `RCORE_OPT_STRING` and NULL = unset; `axis_direction` on input descriptors; `erase_value` on save regions; delay-based lockstep netplay for cores without `ROLLBACK`; optional `state_hash`; instrument env knobs allowed. Sidecar manifest specified. |

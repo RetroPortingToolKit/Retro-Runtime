@@ -48,7 +48,7 @@ extern "C" {
 
 #define RCORE_ABI_MAJOR 0u /* 0 = draft; the first implemented contract is 1 */
 #define RCORE_ABI_MINOR 0u
-#define RCORE_DRAFT_REVISION 5u /* draft-only counter; see docs/CORE_ABI.md */
+#define RCORE_DRAFT_REVISION 6u /* draft-only counter; see docs/CORE_ABI.md */
 
 #if defined(_WIN32)
 #  define RCORE_EXPORT __declspec(dllexport)
@@ -171,6 +171,14 @@ typedef struct rcore_pad {
     uint32_t _pad0;
     int16_t  axes[RCORE_AXIS_COUNT]; /* -32768..32767 */
 } rcore_pad;
+
+/* One seat's pad as a netplay input row (rev 6; rcore_core_api
+ * net_row_from_pad). */
+typedef struct rcore_net_row {
+    uint16_t buttons;             /* the console's own 16 button bits */
+    int8_t   stick_x;             /* -128..127, the core's own scale */
+    int8_t   stick_y;             /* positive = up */
+} rcore_net_row;
 
 typedef struct rcore_input_descriptor {
     uint32_t struct_size;
@@ -470,9 +478,14 @@ typedef struct rcore_core_api {
      *   run_frame / run_frame_resim              -> RNET_RB_REPLAY_INCREMENTAL
      *   state_hash / state_hash_parts            -> digest_master / digest_parts
      *
-     * Pads need no core hook: the runner decodes published rows into the
-     * generic rcore_pad that input_get returns, and the core maps that to its
-     * console exactly as it does offline.
+     * Pads: the runner decodes published rows into the generic rcore_pad that
+     * input_get returns, and the core maps that to its console exactly as it
+     * does offline. AMENDED rev 6 (2026-09-29): a row holds 16 buttons and ONE
+     * 8-bit stick (recomp-net RNetRbFrame), so a pad whose console inputs ride
+     * a second stick -- n64lle's C buttons are RCORE_AXIS_RX/RY -- does not
+     * survive the generic decode. Such a core supplies net_row_from_pad /
+     * net_row_to_pad (below); without them the runner packs buttons 0-15 and
+     * LX/LY, and refuses a core that declares RX/RY/LT/RT inputs.
      *
      * All of these are called only at a frame boundary, on the core thread.
      * The ring is the CORE's, sized by the core. A snapshot keyed T is the
@@ -496,6 +509,18 @@ typedef struct rcore_core_api {
      * (e.g. "cpu", "rdram", "rsp"). state_hash must equal a pure function of
      * the parts. */
     void (*state_hash_parts)(uint64_t parts[3], const char* names[3]);
+
+    /* --- appended in draft revision 6: the netplay input row ---
+     *
+     * What one seat's pad is on the wire, in the core's own terms. A row is
+     * 16 button bits and one signed 8-bit stick (recomp-net's RNetRbFrame),
+     * which is exactly an N64, SNES or digital PSX pad. from_pad reduces a
+     * live pad to it (the same reduction the core applies to input_get
+     * offline); to_pad expands a row back to an rcore_pad that the core maps
+     * to exactly that row again -- from_pad(to_pad(r)) == r for every legal
+     * row. Both are pure. NULL = the runner's generic packing (see rev 4). */
+    void (*net_row_from_pad)(const rcore_pad* pad, rcore_net_row* row);
+    void (*net_row_to_pad)(const rcore_net_row* row, rcore_pad* pad);
 } rcore_core_api;
 
 /* The single exported symbol. Returns NULL when the core cannot serve

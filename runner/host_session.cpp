@@ -124,7 +124,11 @@ void HostSession::h_input(void* ctx, std::uint32_t seat, rcore_pad* out) {
     if (!out) return;
     rcore_pad pad{};
     pad.struct_size = sizeof(rcore_pad);
-    if (seat < RCORE_MAX_SEATS) self(ctx)->sink_.input(seat, pad);
+    HostSession* s = self(ctx);
+    if (seat < RCORE_MAX_SEATS) {
+        if (s->input_source_) s->input_source_(seat, pad);
+        else s->sink_.input(seat, pad);
+    }
     *out = pad;
 }
 
@@ -168,9 +172,14 @@ void HostSession::h_frame_rate(void* ctx, std::uint32_t num, std::uint32_t den) 
     self(ctx)->sink_.frame_rate(num, den);
 }
 
-std::uint64_t HostSession::h_wall_clock(void*) {
-    // Offline: real time. A netplay or replay session will return a pure
-    // function of the agreed epoch and the frame number instead (rev 4).
+std::uint64_t HostSession::h_wall_clock(void* ctx) {
+    // Netplay: the agreed epoch plus the frames run at a nominal 60 Hz -- a
+    // pure function of the frame number (rev 4). Not the core's stated rate:
+    // a core states it only on live frames, so it is not a function of the
+    // frame number once a replay has run.
+    HostSession* s = self(ctx);
+    if (s->clock_tick_) return s->clock_epoch_us_ + s->clock_tick_() * 1000000ull / 60ull;
+    // Offline: real time.
     using namespace std::chrono;
     return static_cast<std::uint64_t>(
         duration_cast<microseconds>(system_clock::now().time_since_epoch()).count());

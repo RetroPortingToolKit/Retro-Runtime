@@ -48,6 +48,7 @@
 #include "core_library.hpp"
 #include "core_manifest.hpp"
 #include "host_session.hpp"
+#include "net_session.hpp"
 #include "link_protocol.hpp"
 #include "runner_link.hpp"
 #include "runtime_version.h"
@@ -56,6 +57,7 @@
 #include "transport.hpp"
 
 #include <array>
+#include <chrono>
 #include <cinttypes>
 #include <cstdio>
 #include <cstdlib>
@@ -63,6 +65,7 @@
 #include <fstream>
 #include <iterator>
 #include <map>
+#include <thread>
 #include <optional>
 #include <string>
 #include <utility>
@@ -263,10 +266,12 @@ void print_version() {
                 "gl %d\n"
                 "game_package 1\n"
                 "describe 1\n"
-                "transfer_pak_seats %zu\n",
+                "transfer_pak_seats %zu\n"
+                "netplay %d\n",
                 RETRO_RUNTIME_VERSION, RETRO_RUNTIME_VERSION, RETRO_RUNTIME_COMMIT,
                 retro::corelink::kProtocolMajor, retro::corelink::kProtocolMinor,
-                RCORE_ABI_MAJOR, RCORE_DRAFT_REVISION, gl, retro::runner::kTransferPakSeats);
+                RCORE_ABI_MAJOR, RCORE_DRAFT_REVISION, gl, retro::runner::kTransferPakSeats,
+                NetSession::compiled_in() ? 1 : 0);
 }
 
 // One --describe field: \ TAB LF CR escaped, so a record is one line; a NULL
@@ -354,6 +359,9 @@ int main(int argc, char** argv) {
     std::optional<std::uint64_t> replay_at;
     std::map<std::string, std::string> overrides;
     std::vector<std::pair<std::uint64_t, std::uint32_t>> script;
+    // Netplay (net_session.hpp): any --net-* flag makes this a netplay run.
+    bool netplay = false;
+    NetParams net;
 
     for (int i = 1; i < argc; ++i) {
         const std::string a = args[i];
@@ -397,6 +405,17 @@ int main(int argc, char** argv) {
         else if (a == "--list-options") list_options = true;
         else if (a == "--describe") describe = true;
         else if (a == "--replay-at") replay_at = num(val());
+        else if (a == "--net-slot") { netplay = true; net.slot = static_cast<int>(num(val())); }
+        else if (a == "--net-slots") { netplay = true; net.slots = static_cast<int>(num(val())); }
+        else if (a == "--net-occupied") { netplay = true; net.occupied = static_cast<std::uint32_t>(num(val())); }
+        else if (a == "--net-delay") { netplay = true; net.delay = static_cast<int>(num(val())); }
+        else if (a == "--net-prediction") { netplay = true; net.prediction = static_cast<int>(num(val())); }
+        else if (a == "--net-session") { netplay = true; net.session_id = static_cast<std::uint32_t>(num(val())); }
+        else if (a == "--net-epoch") { netplay = true; net.epoch_s = num(val()); }
+        else if (a == "--net-bind") { netplay = true; net.bind = val(); }
+        else if (a == "--net-peer") { netplay = true; net.peer = val(); }
+        else if (a == "--net-relay") { netplay = true; net.peer = val(); net.via_relay = true; }
+        else if (a == "--net-content") { netplay = true; net.content.push_back(val()); }
         else if (a == "--opt") {
             const std::string kv = val();
             const auto eq = kv.find('=');
@@ -421,6 +440,13 @@ int main(int argc, char** argv) {
         }
     }
     if (core_path.empty()) die("--core <library> is required");
+    if (netplay && link) die("netplay through the hub link is not built yet: headless only");
+    if (netplay && (replay_at || load_state))
+        die("netplay starts from a cold boot: --replay-at and --load-state are refused");
+    if (netplay && !NetSession::compiled_in())
+        die("--net-*: this runner was built without recomp-net (RETRO_RUNTIME_RECOMP_NET_DIR)");
+    if (netplay && net.slot != 0 && net.peer.empty())
+        die("--net-peer <host:port> is required for a guest (seat > 0)");
     if (rom.empty() && !describe) die("--rom <image> is required");
     std::error_code ec;
     if (!describe) fs::create_directories(out, ec);
@@ -536,9 +562,17 @@ int main(int argc, char** argv) {
     const std::string cache = out.string();
     rcore_init_params ip{};
     ip.struct_size = sizeof ip;
-    ip.flags = strict ? RCORE_INIT_STRICT : 0u;
+    ip.flags = (strict ? RCORE_INIT_STRICT : 0u) | (netplay ? RCORE_INIT_NETPLAY : 0u);
     ip.system_dir = nullptr;
     ip.cache_dir = cache.c_str();
+    NetSession ns;
+    std::uint64_t net_tick = 0;
+    if (netplay) {
+        // Settled before the core runs: rows from the session, the clock from
+        // the agreed epoch.
+        session.set_input_source([&](std::uint32_t seat, rcore_pad& pad) { pad = ns.seat_pad(seat); });
+        session.set_session_clock(net.epoch_s * 1000000ull, [&] { return net_tick; });
+    }
     if (const rcore_result rc = core.api->init(session.host_api(), &ip); rc != RCORE_OK) {
         die("init -> " + std::to_string(rc));
     }
@@ -583,6 +617,98 @@ int main(int argc, char** argv) {
         std::printf("state: loaded %s (%s, %llu bytes)\n", load_state->string().c_str(),
                     retro::state::is_envelope(*load_state) ? "envelope" : "bare",
                     static_cast<unsigned long long>(bytes));
+    }
+
+    // ---- netplay: the driver admits live and replayed frames --------------
+    if (netplay) {
+        // What every peer must hold identically, beside the core (in build).
+        const std::string rom_sha = file_sha256_hex(retro::corelink::utf8_path(rom));
+        if (rom_sha.empty()) die("--rom " + rom + ": unreadable");
+        net.content.push_back("rom " + rom_sha);
+        if (!pkg_sha.empty()) net.content.push_back("package " + pkg_sha);
+        {
+            std::uint32_t n = 0;
+            const rcore_option* decl = core.api->options ? core.api->options(&n) : nullptr;
+            for (std::uint32_t i = 0; decl && i < n; ++i) {
+                if (!(decl[i].flags & RCORE_OPT_FLAG_NETPLAY)) continue;
+                const auto it = session.options().find(decl[i].key);
+                net.content.push_back(std::string("option ") + decl[i].key + "=" +
+                                      (it != session.options().end() && it->second ? *it->second : "(unset)"));
+            }
+        }
+        for (std::size_t seat = 0; seat < retro::runner::kTransferPakSeats; ++seat) {
+            if (tpak_roms[seat].empty()) continue;
+            const std::string rs = file_sha256_hex(retro::corelink::utf8_path(tpak_roms[seat]));
+            const std::string ss = tpak_saves[seat] ? file_sha256_hex(*tpak_saves[seat]) : std::string("none");
+            net.content.push_back("tpak" + std::to_string(seat + 1) + " rom " + rs + " save " +
+                                  (ss.empty() ? std::string("none") : ss));
+        }
+        if (!ns.start(core, net, &err)) die("netplay: " + err);
+        const std::uint64_t target = frames;
+        std::uint64_t live = 0;
+        bool quiescing = false, ok_net = true;
+        std::uint32_t target_tick = 0;
+        std::uint64_t target_hash = 0;
+        std::string end;
+        const auto t0 = std::chrono::steady_clock::now();
+        while (true) {
+            // The local pad for the next frames: the script, on seat 0's terms.
+            rcore_pad local{};
+            local.struct_size = sizeof local;
+            frame = live + 1;
+            sink.input(0, local);
+            ns.stage_local(local);
+            const NetSession::Admit a = ns.poll();
+            if (a == NetSession::Admit::Stall) {
+                end = ns.ended();
+                if (!end.empty()) {
+                    ok_net = quiescing; // a peer leaving after the drain is the end
+                    break;
+                }
+                if (quiescing && ns.drained()) break;
+                ns.wait(2);
+                continue;
+            }
+            net_tick = ns.tick();
+            const rcore_result rc = a == NetSession::Admit::Live ? core.api->run_frame()
+                                                                 : core.api->run_frame_resim();
+            if (rc != RCORE_OK) {
+                end = std::string("run_frame") + (a == NetSession::Admit::Replay ? "_resim" : "") +
+                      " -> " + std::to_string(rc);
+                ok_net = false;
+                break;
+            }
+            ns.finish(a);
+            if (a == NetSession::Admit::Live && ++live >= target && !quiescing) {
+                // The digest at exactly the target frame, the same frame on
+                // every peer; the drain that follows runs a few frames more.
+                target_tick = ns.tick();
+                target_hash = core.api->state_hash ? core.api->state_hash() : 0;
+                ns.request_quiesce();
+                quiescing = true;
+            }
+            if (quiescing && ns.drained()) break;
+        }
+        const double secs =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        const NetStats st = ns.stats();
+        std::printf("NETPLAY_DONE seat=%d live=%llu replayed=%llu stalls=%llu episodes=%u "
+                    "desyncs=%u rtt_ms=%u confirmed_through=%u at_tick=%u at_hash=%016llx "
+                    "secs=%.2f%s%s\n",
+                    net.slot, static_cast<unsigned long long>(st.live),
+                    static_cast<unsigned long long>(st.replayed),
+                    static_cast<unsigned long long>(st.stalls), st.episodes, st.desyncs, st.rtt_ms,
+                    st.confirmed_through, target_tick, static_cast<unsigned long long>(target_hash), secs,
+                    end.empty() ? "" : " ended=", end.c_str());
+        ns.shutdown();
+        core.api->unload();
+        write_ppm(out / "shot.ppm", sink.last, sink.last_w, sink.last_h);
+        {
+            std::ofstream sm(out / "summary.txt");
+            for (const auto& l : sink.summary) sm << l << '\n';
+        }
+        core.api->deinit();
+        return (ok_net && !sink.faults) ? 0 : 1;
     }
 
     // ---- run --------------------------------------------------------------
