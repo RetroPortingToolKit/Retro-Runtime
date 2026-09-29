@@ -6,6 +6,7 @@
 #include "core_library.hpp"
 #include "core_manifest.hpp"
 #include "host_session.hpp"
+#include "net_session.hpp"
 
 #include <map>
 #include <optional>
@@ -39,6 +40,10 @@ struct LinkArgs {
     // empty for a seat without one.
     std::array<std::string, kTransferPakSeats> tpak_roms;
     std::string link_handles; // --link-handles (Windows)
+    // Netplay (--net-*): the hub grants frames with the LOCAL player's pad in
+    // seat 0; the session supplies every seat's published row.
+    bool netplay = false;
+    NetParams net;
 };
 
 // Runs the session until the hub sends Quit or goes away. Returns the

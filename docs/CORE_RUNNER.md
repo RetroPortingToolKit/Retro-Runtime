@@ -215,8 +215,13 @@ checkout>`; `--version` then says `netplay 1`, otherwise `netplay 0` and every
   `state_hash` at frame 599, 0 desyncs; a forced-mispredict peer, 198
   episodes, 0 desyncs; three seats with seat 0 relaying, identical on all
   three; a different settled epoch refused (`mod_set_mismatch`).
-- **Not built:** netplay through the hub link (`--link` with `--net-*` is
-  refused), NAT traversal, a spectator seat, and play over a real network.
+- **Through the hub link** (`--link` with `--net-*`): the hub grants frames
+  with the local player's pad in seat 0 (`LaunchSpec::extra_args` carries the
+  flags); each grant is answered by the next LIVE frame, any replays running
+  silently first, so the network paces the hub. Savestate requests are
+  refused during a match. A match that ends (refused, a player gone) exits 4
+  with the reason.
+- **Not built:** NAT traversal, a spectator seat, and play over a real network.
 
 ## Not built yet
 

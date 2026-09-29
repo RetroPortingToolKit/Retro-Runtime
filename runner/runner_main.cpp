@@ -440,7 +440,6 @@ int main(int argc, char** argv) {
         }
     }
     if (core_path.empty()) die("--core <library> is required");
-    if (netplay && link) die("netplay through the hub link is not built yet: headless only");
     if (netplay && (replay_at || load_state))
         die("netplay starts from a cold boot: --replay-at and --load-state are refused");
     if (netplay && !NetSession::compiled_in())
@@ -538,6 +537,8 @@ int main(int argc, char** argv) {
         la.load_state = load_state;
         la.tpak_roms = tpak_roms;
         la.link_handles = link_handles;
+        la.netplay = netplay;
+        la.net = net;
         std::fflush(stdout);
         return run_link_mode(core, manifest, la, lend);
     }

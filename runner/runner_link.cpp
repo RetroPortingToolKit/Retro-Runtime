@@ -1,4 +1,5 @@
 #include "runner_link.hpp"
+#include "sha256.hpp"
 
 #include "../corelink/link_io.hpp"
 #include "state_keeper.hpp"
@@ -217,8 +218,14 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
     const std::string cache = a.out.string();
     rcore_init_params ip{};
     ip.struct_size = sizeof ip;
-    ip.flags = a.strict ? RCORE_INIT_STRICT : 0u;
+    ip.flags = (a.strict ? RCORE_INIT_STRICT : 0u) | (a.netplay ? RCORE_INIT_NETPLAY : 0u);
     ip.cache_dir = cache.c_str();
+    NetSession ns;
+    std::uint64_t net_tick = 0;
+    if (a.netplay) {
+        session.set_input_source([&](std::uint32_t seat, rcore_pad& pad) { pad = ns.seat_pad(seat); });
+        session.set_session_clock(a.net.epoch_s * 1000000ull, [&] { return net_tick; });
+    }
     if (const rcore_result rc = core.api->init(session.host_api(), &ip); rc != RCORE_OK) {
         return exiting(sock, 2, "init -> " + std::to_string(rc));
     }
@@ -300,6 +307,37 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         }
     }
 
+    if (a.netplay) {
+        // The match key: what every peer must hold identically. Save memory
+        // is the hub's to fill, so a Transfer Pak's save is hashed as filled.
+        NetParams net = a.net;
+        const std::string rom_sha = file_sha256_hex(utf8_path(a.rom));
+        if (rom_sha.empty()) return exiting(sock, 2, "netplay: the ROM is unreadable");
+        net.content.push_back("rom " + rom_sha);
+        if (!a.package_sha256.empty()) net.content.push_back("package " + a.package_sha256);
+        std::uint32_t n = 0;
+        const rcore_option* decl = core.api->options ? core.api->options(&n) : nullptr;
+        for (std::uint32_t i = 0; decl && i < n; ++i) {
+            if (!(decl[i].flags & RCORE_OPT_FLAG_NETPLAY)) continue;
+            const auto it = session.options().find(decl[i].key);
+            net.content.push_back(std::string("option ") + decl[i].key + "=" +
+                                  (it != session.options().end() && it->second ? *it->second
+                                                                               : "(unset)"));
+        }
+        for (std::size_t seat = 0; seat < kTransferPakSeats; ++seat) {
+            if (a.tpak_roms[seat].empty()) continue;
+            std::string save = "none";
+            for (const SaveRegion& r : session.save_regions()) {
+                if (r.id == "tpak" + std::to_string(seat + 1))
+                    save = sha256_hex(r.data, r.size);
+            }
+            net.content.push_back("tpak" + std::to_string(seat + 1) + " rom " +
+                                  file_sha256_hex(utf8_path(a.tpak_roms[seat])) + " save " + save);
+        }
+        std::string nerr;
+        if (!ns.start(core, net, &nerr)) return exiting(sock, 2, "netplay: " + nerr);
+    }
+
     EmptyMsg ready{};
     ready.h.type = Msg::Ready;
     if (!send_msg(sock, ready)) return 2;
@@ -312,6 +350,16 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         Msg t{};
         packet_type(buf, t);
         if (t == Msg::Quit) break;
+        if ((t == Msg::SaveState || t == Msg::LoadState) && a.netplay) {
+            // A match starts from a cold boot and is never rewound by a player.
+            StateDoneMsg d{};
+            d.h.type = Msg::StateDone;
+            d.request = t;
+            d.ok = 0;
+            copy_str(d.detail, sizeof d.detail, "savestates are off during a netplay match");
+            send_msg(sock, d);
+            continue;
+        }
         if (t == Msg::SaveState || t == Msg::LoadState) {
             // 1.1. Between frames by construction: one grant at a time, and
             // the hub sends a request only when none is outstanding.
@@ -351,7 +399,47 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         FrameDoneMsg done{};
         done.h.type = Msg::FrameDone;
         done.frame_number = g.frame_number;
-        done.result = core.api->run_frame();
+        if (!a.netplay) {
+            done.result = core.api->run_frame();
+        } else {
+            // One grant = one LIVE frame. Replays the driver asks for run
+            // first, silently; a stall waits on the network -- which is what
+            // paces the hub -- while still hearing the hub's Quit.
+            ns.stage_local(g.pads[0]);
+            bool quit = false;
+            for (;;) {
+                const NetSession::Admit adm = ns.poll();
+                if (adm == NetSession::Admit::Stall) {
+                    const std::string end = ns.ended();
+                    if (!end.empty()) {
+                        code = exiting(sock, 4, "netplay: " + end);
+                        quit = true;
+                        break;
+                    }
+                    std::vector<unsigned char> peek;
+                    if (recv_packet(sock, peek, nullptr, 0) == RecvResult::Packet) {
+                        Msg pt{};
+                        packet_type(peek, pt);
+                        if (pt == Msg::Quit) {
+                            quit = true;
+                            break;
+                        }
+                    }
+                    ns.wait(1);
+                    continue;
+                }
+                net_tick = ns.tick();
+                const rcore_result rc = adm == NetSession::Admit::Live
+                                            ? core.api->run_frame()
+                                            : core.api->run_frame_resim();
+                ns.finish(adm);
+                if (rc != RCORE_OK || adm == NetSession::Admit::Live) {
+                    done.result = rc;
+                    break;
+                }
+            }
+            if (quit) break;
+        }
         send_msg(sock, done);
         if (sink.bad_frames) {
             code = exiting(sock, 1, "the core submitted a frame this link cannot carry "

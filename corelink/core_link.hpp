@@ -46,6 +46,10 @@ struct LaunchSpec {
     // read input while it loads a state). Frame pads come with each grant.
     rcore_pad initial_pads[RCORE_MAX_SEATS]{};
     std::vector<std::string> env;               // extra NAME=value for the runner
+    // Extra argv after everything above: netplay's --net-* flags
+    // (retro-core-runner docs/CORE_RUNNER.md, "Netplay"). A runner that does
+    // not know one exits 2, and the hub shows why.
+    std::vector<std::string> extra_args;
 };
 
 struct CoreIdentity {

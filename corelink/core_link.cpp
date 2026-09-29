@@ -69,6 +69,7 @@ bool CoreLink::start(const LaunchSpec& spec, std::string* error) {
         args.push_back("--tpak" + std::to_string(seat + 1) + "-rom");
         args.push_back(spec_.tpak_roms[seat]);
     }
+    args.insert(args.end(), spec_.extra_args.begin(), spec_.extra_args.end());
     sp.env = spec_.env;
     sp.log = runner_log();
     if (!spawn_runner(sp, region_, channel_, process_, &err)) return fail(err);
