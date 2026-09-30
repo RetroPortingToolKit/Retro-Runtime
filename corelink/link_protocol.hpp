@@ -31,16 +31,26 @@
 
 namespace retro::corelink {
 
-constexpr std::uint32_t kProtocolMajor = 1;
-constexpr std::uint32_t kProtocolMinor = 1; // 1.1: savestates (SaveState / LoadState / StateDone)
+// 2.0 (2026-09-30): frame slots 2048x1536 (from 1024x1024), for a core that
+// presents above its console's native raster (n64lle's internal resolution up
+// to 4x is 1280x960). The shared region's layout moved, so a 1.x peer is
+// refused at hello rather than reading frames at the wrong offsets.
+constexpr std::uint32_t kProtocolMajor = 2;
+constexpr std::uint32_t kProtocolMinor = 0;
+// A link only comes up between peers of the same major, and a new major
+// carries every message the old one had: savestates arrived in 1.1, so a 2.x
+// peer has them whatever its minor. Gate on this, never on the minor alone.
+constexpr bool link_has_savestates(std::uint32_t peer_minor) {
+    return kProtocolMajor > 1 || peer_minor >= 1;
+}
 constexpr char kMagic[8] = {'R', 'C', 'L', 'I', 'N', 'K', '1', '\0'};
 
-// Frame slots big enough for any console this contract hosts at 1x: the
-// largest is 640x480 today. A frame that does not fit is a runner FAULT, not
-// a scaled copy.
+// Frame slots big enough for any frame a core presents: 640x480 at a console's
+// 1x, and a core's internal resolution above that (1280x960 for n64lle at 4x).
+// A frame that does not fit is a runner FAULT, not a scaled copy.
 constexpr std::uint32_t kFrameSlots = 3;
-constexpr std::uint32_t kMaxFrameWidth = 1024;
-constexpr std::uint32_t kMaxFrameHeight = 1024;
+constexpr std::uint32_t kMaxFrameWidth = 2048;
+constexpr std::uint32_t kMaxFrameHeight = 1536;
 constexpr std::size_t kFrameSlotBytes = std::size_t(kMaxFrameWidth) * kMaxFrameHeight * 4;
 constexpr std::uint32_t kFresh = 0x80000000u; // `middle` holds an unread frame
 

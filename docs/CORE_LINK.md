@@ -16,7 +16,7 @@ protocol is the same on all three.
 | Channel | What | Owner |
 |---|---|---|
 | control | `SOCK_SEQPACKET` socketpair, one message per packet; the runner's end at fd 3 | — |
-| shared region | one `memfd` at fd 4: header, 3 frame slots of 1024×1024 RGBA, an audio ring | **hub** creates it |
+| shared region | one `memfd` at fd 4: header, 3 frame slots of 2048×1536 RGBA (1024×1024 until protocol 2.0, 2026-09-30), an audio ring | **hub** creates it |
 | save memory | one `memfd` per save region, sent to the hub with `SCM_RIGHTS` | runner creates it (sizes are known only after `load()`); **hub** fills and persists it |
 
 Everything the hub needs after a runner crash is memory the hub holds: the

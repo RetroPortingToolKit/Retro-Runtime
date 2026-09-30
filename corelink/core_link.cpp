@@ -220,7 +220,7 @@ bool CoreLink::grant(const rcore_pad pads[RCORE_MAX_SEATS]) {
 }
 
 bool CoreLink::states_supported() const {
-    return state_ == LinkState::Ready && identity_.protocol_minor >= 1 &&
+    return state_ == LinkState::Ready && link_has_savestates(identity_.protocol_minor) &&
            (identity_.capabilities & RCORE_CAP_SAVESTATE);
 }
 
