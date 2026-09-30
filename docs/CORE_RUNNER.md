@@ -54,7 +54,10 @@ This page covers what exists and how it is checked.
    --input-script --list-options`). The Transfer Pak flags go up to seat 4
    (`--tpakN-rom`, `--tpakN-save`, `--tpakN-rtc`, N = 1-4; 2026-09-27): each
    seat with a cartridge gets an `n64.transfer_pak` binding at slot 0, and its
-   save regions are `tpakN` and `tpakN.rtc`.
+   save regions are `tpakN` and `tpakN.rtc`. `--input-script F:buttons,...` holds
+   `a b z l r start dup ddown dleft dright` and, since 2026-09-29, `cup cdown
+   cleft cright`: the right stick at full deflection (+y up), where n64lle
+   reads its C buttons.
 5. **Savestates** (`runner/state_keeper.*`, 2026-09-26). The runner writes
    and checks the savestate envelope (`OVERLAY.md`, `CORE_ABI.md`
    "Savestates"). It holds every identity the load rule compares: the core's

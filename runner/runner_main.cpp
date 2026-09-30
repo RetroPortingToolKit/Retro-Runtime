@@ -88,6 +88,13 @@ namespace {
     std::exit(2);
 }
 
+// Script-only bits above every RCORE_PAD_* button: a direction of the right
+// stick at full deflection (+y is up), which is where a core with a second
+// cluster reads it -- n64lle's C buttons are RCORE_AXIS_RX/RY (rcore.h rev 6).
+constexpr std::uint32_t kScriptCLeft = 1u << 28, kScriptCRight = 1u << 29, kScriptCUp = 1u << 30,
+                        kScriptCDown = 1u << 31;
+constexpr std::uint32_t kScriptStick = kScriptCLeft | kScriptCRight | kScriptCUp | kScriptCDown;
+
 std::uint32_t script_buttons(const std::string& s) {
     std::uint32_t b = 0;
     size_t start = 0;
@@ -106,6 +113,10 @@ std::uint32_t script_buttons(const std::string& s) {
         else if (tok == "ddown") b |= RCORE_PAD_DPAD_DOWN;
         else if (tok == "dleft") b |= RCORE_PAD_DPAD_LEFT;
         else if (tok == "dright") b |= RCORE_PAD_DPAD_RIGHT;
+        else if (tok == "cleft") b |= kScriptCLeft;
+        else if (tok == "cright") b |= kScriptCRight;
+        else if (tok == "cup") b |= kScriptCUp;
+        else if (tok == "cdown") b |= kScriptCDown;
         else die("--input-script: unknown button '" + tok + "'");
         if (plus == std::string::npos) break;
         start = plus + 1;
@@ -181,7 +192,9 @@ public:
         for (const auto& [at, buttons] : script_) {
             if (at <= *frame_) held = buttons;
         }
-        pad.buttons = held;
+        pad.buttons = held & ~kScriptStick;
+        pad.axes[RCORE_AXIS_RX] = (held & kScriptCLeft) ? -32767 : (held & kScriptCRight) ? 32767 : 0;
+        pad.axes[RCORE_AXIS_RY] = (held & kScriptCUp) ? 32767 : (held & kScriptCDown) ? -32767 : 0;
     }
 
     std::vector<std::string> summary;
