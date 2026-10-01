@@ -35,7 +35,16 @@
 //            <label> <description>
 //   value    <key> <one enum value>        (after its option, in declared order)
 //   input    <button> <axis> <axis_direction> <label>
+//   accessory <id> <label> <flags> <seat_mask> <slot_mask>
 // Nothing else goes to stdout. A refusal is exit 2, as for a run.
+//
+// --vruN (N = 1-4): the VRU microphone on seat N, the n64.vru data accessory
+// (rcore rev 7, docs/CORE_ABI.md "Accessory data"), slot 0, no content. The
+// core must declare accessory_data and the type, or the runner exits 2. That
+// seat reads no pad. Headless, --accessory-script <file> feeds the accessory:
+// one `frame<TAB>seat<TAB>slot<TAB>bytes` line per message, seen by the core
+// in that frame; what the core notifies back prints to stderr as
+//   ACCESSORY_NOTIFY <seat> <slot> <bytes>
 //
 // --package <library>: a GAME_PACKAGE core's generated-code package, passed
 // as rcore_load_params.package_path. Required for such a core, refused for
@@ -127,7 +136,8 @@ std::uint32_t script_buttons(const std::string& s) {
 // Headless: everything to files, input from a script on seat 0.
 class HeadlessSink final : public Sink {
 public:
-    HeadlessSink(const fs::path& out, bool seat0, std::vector<std::pair<std::uint64_t, std::uint32_t>> script,
+    HeadlessSink(const fs::path& out, bool seat0,
+                 std::vector<std::pair<std::uint64_t, std::uint32_t>> script,
                  const std::uint64_t* frame)
         : seat0_(seat0), script_(std::move(script)), frame_(frame),
           log_(out / "core.log"), events_(out / "events.tsv") {}
@@ -195,6 +205,14 @@ public:
         pad.buttons = held & ~kScriptStick;
         pad.axes[RCORE_AXIS_RX] = (held & kScriptCLeft) ? -32767 : (held & kScriptCRight) ? 32767 : 0;
         pad.axes[RCORE_AXIS_RY] = (held & kScriptCUp) ? 32767 : (held & kScriptCDown) ? -32767 : 0;
+    }
+
+    // With no hub to hand them to, an accessory's messages go to stderr, one
+    // line each, where a test reads them beside the FAULT lines.
+    void accessory_notify(std::uint32_t seat, std::uint32_t slot, const void* data,
+                          std::size_t len) override {
+        std::fprintf(stderr, "ACCESSORY_NOTIFY %u %u %.*s\n", seat, slot, static_cast<int>(len),
+                     static_cast<const char*>(data));
     }
 
     std::vector<std::string> summary;
@@ -280,7 +298,8 @@ void print_version() {
                 "game_package 1\n"
                 "describe 1\n"
                 "transfer_pak_seats %zu\n"
-                "netplay %d\n",
+                "netplay %d\n"
+                "accessory_data 1\n",
                 RETRO_RUNTIME_VERSION, RETRO_RUNTIME_VERSION, RETRO_RUNTIME_COMMIT,
                 retro::corelink::kProtocolMajor, retro::corelink::kProtocolMinor,
                 RCORE_ABI_MAJOR, RCORE_DRAFT_REVISION, gl, retro::runner::kTransferPakSeats,
@@ -348,6 +367,23 @@ void print_description(const LoadedCore& core) {
         out += "input\t" + std::to_string(d.button) + '\t' + std::to_string(d.axis) + '\t' +
                std::to_string(d.axis_direction) + '\t' + describe_field(d.label) + '\n';
     }
+    // Accessory types, so a host can offer a seat's pak dropdown (the Transfer
+    // Pak, the VRU) without guessing what the core takes where.
+    n = 0;
+    const rcore_accessory_type* types =
+        core.api->accessory_types ? core.api->accessory_types(&n) : nullptr;
+    for (std::uint32_t i = 0; types && i < n; ++i) {
+        const rcore_accessory_type& t = types[i];
+        std::string flags;
+        if (t.flags & RCORE_ACC_FLAG_CONTENT) flags += ",content";
+        if (t.flags & RCORE_ACC_FLAG_SAVE) flags += ",save";
+        if (t.flags & RCORE_ACC_FLAG_NETPLAY) flags += ",netplay";
+        flags = flags.empty() ? "-" : flags.substr(1);
+        char masks[24];
+        std::snprintf(masks, sizeof masks, "%x\t%x", t.seat_mask, t.slot_mask);
+        out += "accessory\t" + describe_field(t.id) + '\t' + describe_field(t.label) + '\t' +
+               flags + '\t' + masks + '\n';
+    }
     std::fwrite(out.data(), 1, out.size(), stdout);
     std::fflush(stdout);
 }
@@ -366,6 +402,9 @@ int main(int argc, char** argv) {
     // its battery save and its MBC3 clock.
     std::array<std::string, retro::runner::kTransferPakSeats> tpak_roms;
     std::array<std::optional<fs::path>, retro::runner::kTransferPakSeats> tpak_saves, tpak_rtcs;
+    // --vruN, N = 1-4: the VRU microphone on seat N (rev 7 data accessory).
+    std::array<bool, retro::runner::kVruSeats> vru_seats{};
+    std::optional<fs::path> accessory_script;
     std::string link_handles;
     bool gl = false, strict = false, seat0 = true, list_options = false, link = false;
     bool describe = false;
@@ -410,6 +449,10 @@ int main(int argc, char** argv) {
                  a[6] < static_cast<char>('1' + retro::runner::kTransferPakSeats) &&
                  a.compare(7, 4, "-rtc") == 0)
             tpak_rtcs[static_cast<std::size_t>(a[6] - '1')] = retro::corelink::utf8_path(val());
+        else if (a.size() == 6 && a.compare(0, 5, "--vru") == 0 && a[5] >= '1' &&
+                 a[5] < static_cast<char>('1' + retro::runner::kVruSeats))
+            vru_seats[static_cast<std::size_t>(a[5] - '1')] = true;
+        else if (a == "--accessory-script") accessory_script = retro::corelink::utf8_path(val());
         else if (a == "--gl") gl = true;
         else if (a == "--link") link = true;
         else if (a == "--link-handles") link_handles = val();
@@ -499,6 +542,17 @@ int main(int argc, char** argv) {
         die("this runner drives RUN_FRAME cores only; the core declares none");
     }
 
+    // ---- data accessories: only what the core declares it takes -----------
+    const std::vector<retro::runner::DataAccessory> data_accessories =
+        retro::runner::vru_accessories(vru_seats);
+    if (const std::string why = retro::runner::check_data_accessories(core, data_accessories, netplay);
+        !why.empty()) {
+        die(why);
+    }
+    if (accessory_script && data_accessories.empty()) {
+        die("--accessory-script: nothing to feed; no --vruN was given");
+    }
+
     // ---- the game package: required by a GAME_PACKAGE core, refused otherwise
     // --describe keeps the refusals but not the requirement: the declarations
     // are the core's, read before load, and a package reaches a core only
@@ -549,6 +603,7 @@ int main(int argc, char** argv) {
         la.overrides = overrides;
         la.load_state = load_state;
         la.tpak_roms = tpak_roms;
+        la.data_accessories = data_accessories;
         la.link_handles = link_handles;
         la.netplay = netplay;
         la.net = net;
@@ -560,6 +615,48 @@ int main(int argc, char** argv) {
     std::uint64_t frame = 0; // the frame being run, 1-based; the input script reads it
     HeadlessSink sink(out, seat0, std::move(script), &frame);
     HostSession session(core, sink);
+    for (const auto& d : data_accessories) session.bind_data_accessory(d.seat, d.slot);
+    // The accessory script: frame, seat, slot, bytes, TAB-separated, one
+    // message per line, fed before the frame it names runs. A line for a
+    // (seat, slot) nothing is plugged into is a refusal, as a bad flag is.
+    struct AccessoryLine {
+        std::uint64_t frame;
+        std::uint32_t seat, slot;
+        std::string bytes;
+    };
+    std::vector<AccessoryLine> accessory_lines;
+    if (accessory_script) {
+        std::ifstream in(*accessory_script);
+        if (!in) die("--accessory-script " + accessory_script->string() + ": cannot open");
+        std::string line;
+        std::uint64_t lineno = 0;
+        while (std::getline(in, line)) {
+            ++lineno;
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (line.empty() || line[0] == '#') continue;
+            const auto t1 = line.find('\t');
+            const auto t2 = t1 == std::string::npos ? t1 : line.find('\t', t1 + 1);
+            const auto t3 = t2 == std::string::npos ? t2 : line.find('\t', t2 + 1);
+            const std::string at = accessory_script->string() + ":" + std::to_string(lineno);
+            if (t3 == std::string::npos) die(at + ": want frame<TAB>seat<TAB>slot<TAB>bytes");
+            auto field = [&](const std::string& v) -> std::uint64_t {
+                char* end = nullptr;
+                const unsigned long long n = std::strtoull(v.c_str(), &end, 10);
+                if (v.empty() || *end) die(at + ": not a number: " + v);
+                return n;
+            };
+            AccessoryLine l;
+            l.frame = field(line.substr(0, t1));
+            l.seat = static_cast<std::uint32_t>(field(line.substr(t1 + 1, t2 - t1 - 1)));
+            l.slot = static_cast<std::uint32_t>(field(line.substr(t2 + 1, t3 - t2 - 1)));
+            l.bytes = line.substr(t3 + 1);
+            if (!session.is_data_accessory(l.seat, l.slot)) {
+                die(at + ": nothing is plugged into seat " + std::to_string(l.seat) + " slot " +
+                    std::to_string(l.slot));
+            }
+            accessory_lines.push_back(std::move(l));
+        }
+    }
     if (!session.set_options(overrides, &err)) die(err);
     for (const auto& [k, v] : session.options()) {
         if (v) std::printf("option %s = %s\n", k.c_str(), v->c_str());
@@ -593,6 +690,7 @@ int main(int argc, char** argv) {
 
     // ---- load: content, the Transfer Pak bindings, host-owned saves ------
     std::vector<rcore_accessory_binding> bindings = retro::runner::transfer_pak_bindings(tpak_roms);
+    retro::runner::append_data_accessory_bindings(bindings, data_accessories);
     rcore_load_params lp{};
     lp.struct_size = sizeof lp;
     lp.content_path = rom.c_str();
@@ -732,6 +830,12 @@ int main(int argc, char** argv) {
     auto run = [&](std::uint64_t from, std::uint64_t to) {
         for (std::uint64_t k = from; k <= to; ++k) {
             frame = k;
+            // The script's messages for frame k are what arrived before it:
+            // the frame's sequence, the same on a replay of the same frame.
+            for (const AccessoryLine& l : accessory_lines) {
+                if (l.frame == k) session.queue_accessory_data(l.seat, l.slot, l.bytes.data(), l.bytes.size());
+            }
+            session.begin_frame_accessories();
             if (const rcore_result rc = core.api->run_frame(); rc != RCORE_OK) {
                 std::fprintf(stderr, "retro-core-runner: run_frame %llu -> %d\n",
                              static_cast<unsigned long long>(k), rc);

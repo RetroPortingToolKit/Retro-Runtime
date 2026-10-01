@@ -26,6 +26,32 @@ constexpr std::size_t kTransferPakSeats = 4;
 std::vector<rcore_accessory_binding> transfer_pak_bindings(
     const std::array<std::string, kTransferPakSeats>& roms);
 
+// Seats that can carry a VRU microphone (--vru1 .. --vru4): the same four
+// ports. The N64's VRU is the first data accessory (rcore rev 7).
+constexpr std::size_t kVruSeats = 4;
+
+// A data accessory the host plugged (rev 7, docs/CORE_ABI.md "Accessory
+// data"): no content, so the binding is seat, slot and type alone.
+struct DataAccessory {
+    std::uint32_t seat = 0, slot = 0;
+    std::string type_id;
+};
+
+// One n64.vru per --vruN seat: slot 0, no content.
+std::vector<DataAccessory> vru_accessories(const std::array<bool, kVruSeats>& seats);
+
+// Appends one rcore_accessory_binding per data accessory, after the Transfer
+// Paks. `list` must outlive the bindings (they point into its strings).
+void append_data_accessory_bindings(std::vector<rcore_accessory_binding>& out,
+                                    const std::vector<DataAccessory>& list);
+
+// What the core must declare for each data accessory to be plugged: CAP_
+// ACCESSORY_DATA, the type among accessory_types(), and the seat and slot in
+// its masks. A NETPLAY type is refused in a netplay session (its bytes are
+// not replicated to the peers yet). The refusal's words, or empty.
+std::string check_data_accessories(const LoadedCore& core, const std::vector<DataAccessory>& list,
+                                   bool netplay);
+
 struct LinkArgs {
     std::string rom;
     std::string package;     // --package; empty for a core without game_package
@@ -39,6 +65,8 @@ struct LinkArgs {
     // --tpakN-rom: the Game Boy cartridge in seat N's Transfer Pak (N = 1-4),
     // empty for a seat without one.
     std::array<std::string, kTransferPakSeats> tpak_roms;
+    // --vruN: the data accessories, already checked against the core.
+    std::vector<DataAccessory> data_accessories;
     std::string link_handles; // --link-handles (Windows)
     // Netplay (--net-*): the hub grants frames with the LOCAL player's pad in
     // seat 0; the session supplies every seat's published row.

@@ -30,6 +30,58 @@ std::vector<rcore_accessory_binding> transfer_pak_bindings(
     return out;
 }
 
+std::vector<DataAccessory> vru_accessories(const std::array<bool, kVruSeats>& seats) {
+    std::vector<DataAccessory> out;
+    for (std::size_t seat = 0; seat < seats.size(); ++seat) {
+        if (seats[seat]) out.push_back({static_cast<std::uint32_t>(seat), 0, "n64.vru"});
+    }
+    return out;
+}
+
+void append_data_accessory_bindings(std::vector<rcore_accessory_binding>& out,
+                                    const std::vector<DataAccessory>& list) {
+    for (const DataAccessory& a : list) {
+        rcore_accessory_binding b{};
+        b.struct_size = sizeof b;
+        b.seat = a.seat;
+        b.slot = a.slot;
+        b.type_id = a.type_id.c_str();
+        b.content_path = nullptr;
+        b.content_sha256 = nullptr;
+        out.push_back(b);
+    }
+}
+
+std::string check_data_accessories(const LoadedCore& core, const std::vector<DataAccessory>& list,
+                                   bool netplay) {
+    if (list.empty()) return {};
+    const std::string id = core.info->core_id ? core.info->core_id : "";
+    if (!(core.info->capabilities & RCORE_CAP_ACCESSORY_DATA)) {
+        return "accessory " + list.front().type_id + ": core '" + id +
+               "' does not declare accessory_data, so it takes no data accessory";
+    }
+    std::uint32_t n = 0;
+    const rcore_accessory_type* types =
+        core.api->accessory_types ? core.api->accessory_types(&n) : nullptr;
+    for (const DataAccessory& a : list) {
+        const rcore_accessory_type* t = nullptr;
+        for (std::uint32_t i = 0; types && i < n; ++i) {
+            if (types[i].id && a.type_id == types[i].id) t = &types[i];
+        }
+        const std::string where = "accessory " + a.type_id + " on seat " + std::to_string(a.seat) +
+                                  " slot " + std::to_string(a.slot) + ": ";
+        if (!t) return where + "core '" + id + "' declares no such accessory type";
+        if (t->flags & RCORE_ACC_FLAG_CONTENT) return where + "the type takes content, so it is not a data accessory";
+        if (!(t->seat_mask & (1u << a.seat))) return where + "the type does not accept that seat";
+        if (!(t->slot_mask & (1u << a.slot))) return where + "the type does not accept that slot";
+        if (netplay && (t->flags & RCORE_ACC_FLAG_NETPLAY)) {
+            return where + "a NETPLAY data accessory is refused in a netplay session: its bytes are "
+                           "not replicated to the peers yet (docs/CORE_ABI.md, \"Accessory data\")";
+        }
+    }
+    return {};
+}
+
 using namespace retro::corelink;
 
 namespace {
@@ -142,6 +194,16 @@ public:
         if (seat < RCORE_MAX_SEATS) pad = pads[seat];
     }
 
+    // 2.1: straight to the hub, as it arrives; the hub's queue is its own.
+    void accessory_notify(std::uint32_t seat, std::uint32_t slot, const void* data,
+                          std::size_t len) override {
+        if (!send_accessory_msg(sock_, Msg::AccessoryNotify, seat, slot, data, len)) {
+            std::fprintf(stderr, "accessory: a %zu-byte notify from seat %u slot %u could not "
+                                 "be sent to the hub (more than %u bytes, or the hub is gone)\n",
+                         len, seat, slot, kMaxAccessoryBytes);
+        }
+    }
+
     rcore_pad pads[RCORE_MAX_SEATS]{};
     std::uint64_t frame_number = 0; // the granted frame being run
     std::uint32_t faults = 0;
@@ -211,6 +273,25 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
 
     LinkSink sink(sock, shm, a.out);
     HostSession session(core, sink);
+    for (const DataAccessory& d : a.data_accessories) session.bind_data_accessory(d.seat, d.slot);
+    // 2.1: a hub's AccessoryData, queued for the next granted frame. One
+    // arriving for a (seat, slot) nothing is plugged into is dropped and said
+    // once: the hub and the runner disagree about what is bound.
+    bool said_unbound = false;
+    auto take_accessory_data = [&](const std::vector<unsigned char>& pkt) {
+        std::uint32_t seat = 0, slot = 0;
+        std::vector<std::uint8_t> bytes;
+        if (!as_accessory_msg(pkt, seat, slot, bytes)) {
+            std::fprintf(stderr, "accessory: malformed AccessoryData from the hub; dropped\n");
+            return;
+        }
+        if (!session.queue_accessory_data(seat, slot, bytes.data(), bytes.size()) && !said_unbound) {
+            std::fprintf(stderr, "accessory: the hub sent %zu bytes for seat %u slot %u, where "
+                                 "nothing is plugged; dropped (said once)\n",
+                         bytes.size(), seat, slot);
+            said_unbound = true;
+        }
+    };
     std::string err;
     if (!session.set_options(a.overrides, &err)) return exiting(sock, 2, err);
     if (a.gl) lend_gl(session);
@@ -231,6 +312,7 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
     }
 
     std::vector<rcore_accessory_binding> bindings = transfer_pak_bindings(a.tpak_roms);
+    append_data_accessory_bindings(bindings, a.data_accessories);
     rcore_load_params lp{};
     lp.struct_size = sizeof lp;
     lp.content_path = a.rom.c_str();
@@ -284,6 +366,10 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         if (t == Msg::SavesFilled && as_msg(buf, filled)) {
             std::copy(std::begin(filled.pads), std::end(filled.pads), std::begin(sink.pads));
             break;
+        }
+        if (t == Msg::AccessoryData) { // before the first frame: frame 1's
+            take_accessory_data(buf);
+            continue;
         }
         if (t == Msg::Quit) {
             core.api->unload();
@@ -350,6 +436,10 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         Msg t{};
         packet_type(buf, t);
         if (t == Msg::Quit) break;
+        if (t == Msg::AccessoryData) {
+            take_accessory_data(buf);
+            continue;
+        }
         if ((t == Msg::SaveState || t == Msg::LoadState) && a.netplay) {
             // A match starts from a cold boot and is never rewound by a player.
             StateDoneMsg d{};
@@ -396,6 +486,10 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         }
         std::copy(std::begin(g.pads), std::end(g.pads), std::begin(sink.pads));
         sink.frame_number = g.frame_number;
+        // Everything that arrived before this grant is the frame's accessory
+        // sequence; a message that arrives while the frame runs waits for the
+        // next (the runner reads nothing from the hub mid-frame).
+        session.begin_frame_accessories();
         FrameDoneMsg done{};
         done.h.type = Msg::FrameDone;
         done.frame_number = g.frame_number;

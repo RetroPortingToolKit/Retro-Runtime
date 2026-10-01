@@ -32,6 +32,10 @@ public:
     virtual void rumble(std::uint32_t, std::uint16_t, std::uint16_t) {}
     // The core's nominal frame rate, num/den per second (rev 5); 0/0 = unstated.
     virtual void frame_rate(std::uint32_t, std::uint32_t) {}
+    // One message from a data accessory for the host (rev 7 accessory_notify):
+    // its bytes, copied before this returns. Stderr headless, the hub over the
+    // link. May arrive at any point of a frame.
+    virtual void accessory_notify(std::uint32_t, std::uint32_t, const void*, std::size_t) {}
 };
 
 struct SaveRegion {
@@ -80,6 +84,24 @@ public:
     // Write every file-backed region back, as a frontend persists saves.
     void persist_save_regions() const;
 
+    // Data accessories (rev 7, docs/CORE_ABI.md "Accessory data"): the host
+    // side of accessory_poll / accessory_notify. A binding is registered before
+    // init(); from then on that seat reads NO pad -- input_get answers
+    // connected = 0 whatever the Sink or the netplay source says, because the
+    // console reads the port as the accessory alone, and a host that grants a
+    // pad there must not leak it. Messages queued with queue_accessory_data()
+    // wait until begin_frame_accessories(), which makes everything queued so
+    // far THE frame's sequence: accessory_poll hands it out one message at a
+    // time, and a drain (calls until 0) can be repeated within the frame and
+    // see the same sequence again. The next begin_frame_accessories() drops
+    // what the core did not take. Bytes for a (seat, slot) with no binding
+    // are refused (false), never queued.
+    void bind_data_accessory(std::uint32_t seat, std::uint32_t slot);
+    bool is_data_accessory(std::uint32_t seat, std::uint32_t slot) const;
+    bool queue_accessory_data(std::uint32_t seat, std::uint32_t slot, const void* data,
+                              std::size_t len);
+    void begin_frame_accessories();
+
     // Netplay (net_session.hpp): input_get answers from `source` -- the
     // published rows -- instead of the Sink, which then only feeds the local
     // pad into the session.
@@ -109,12 +131,23 @@ private:
     static void* h_gl_proc(void*, const char*);
     static std::uint64_t h_wall_clock(void*);
     static void h_frame_rate(void*, std::uint32_t, std::uint32_t);
+    static std::size_t h_accessory_poll(void*, std::uint32_t, std::uint32_t, void*, std::size_t);
+    static void h_accessory_notify(void*, std::uint32_t, std::uint32_t, const void*, std::size_t);
+
+    struct AccessoryQueue {
+        std::uint32_t seat = 0, slot = 0;
+        std::vector<std::vector<std::uint8_t>> pending; // arrived, for the next frame
+        std::vector<std::vector<std::uint8_t>> frame;   // this frame's sequence
+        std::size_t cursor = 0;                         // the next frame[] to hand out
+    };
+    AccessoryQueue* accessory_queue(std::uint32_t seat, std::uint32_t slot);
 
     const LoadedCore& core_;
     Sink& sink_;
     rcore_host_api host_{};
     std::map<std::string, std::optional<std::string>> options_;
     std::vector<SaveRegion> regions_;
+    std::vector<AccessoryQueue> accessories_;
     void* (*gl_proc_)(const char*) = nullptr;
     std::function<void(std::uint32_t, rcore_pad&)> input_source_;
     std::uint64_t clock_epoch_us_ = 0;

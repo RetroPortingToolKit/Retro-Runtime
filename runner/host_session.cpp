@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 
 namespace retro::runner {
@@ -26,6 +27,50 @@ HostSession::HostSession(const LoadedCore& core, Sink& sink) : core_(core), sink
     host_.gl_get_proc_address = nullptr; // set per session by lend_gl()
     host_.wall_clock_us = h_wall_clock;
     host_.set_frame_rate = h_frame_rate;
+    host_.accessory_poll = h_accessory_poll;
+    host_.accessory_notify = h_accessory_notify;
+}
+
+void HostSession::bind_data_accessory(std::uint32_t seat, std::uint32_t slot) {
+    if (accessory_queue(seat, slot)) return;
+    AccessoryQueue q;
+    q.seat = seat;
+    q.slot = slot;
+    accessories_.push_back(std::move(q));
+}
+
+HostSession::AccessoryQueue* HostSession::accessory_queue(std::uint32_t seat, std::uint32_t slot) {
+    for (AccessoryQueue& q : accessories_) {
+        if (q.seat == seat && q.slot == slot) return &q;
+    }
+    return nullptr;
+}
+
+bool HostSession::is_data_accessory(std::uint32_t seat, std::uint32_t slot) const {
+    for (const AccessoryQueue& q : accessories_) {
+        if (q.seat == seat && q.slot == slot) return true;
+    }
+    return false;
+}
+
+bool HostSession::queue_accessory_data(std::uint32_t seat, std::uint32_t slot, const void* data,
+                                       std::size_t len) {
+    AccessoryQueue* q = accessory_queue(seat, slot);
+    if (!q) return false;
+    // An empty message would read as "nothing queued" to the core and never
+    // be taken; no accessory format has one. Dropped, not queued.
+    if (!len) return true;
+    const auto* p = static_cast<const std::uint8_t*>(data);
+    q->pending.emplace_back(p, p + len);
+    return true;
+}
+
+void HostSession::begin_frame_accessories() {
+    for (AccessoryQueue& q : accessories_) {
+        q.frame.swap(q.pending);
+        q.pending.clear();
+        q.cursor = 0;
+    }
 }
 
 bool HostSession::set_options(const std::map<std::string, std::string>& overrides,
@@ -125,7 +170,12 @@ void HostSession::h_input(void* ctx, std::uint32_t seat, rcore_pad* out) {
     rcore_pad pad{};
     pad.struct_size = sizeof(rcore_pad);
     HostSession* s = self(ctx);
-    if (seat < RCORE_MAX_SEATS) {
+    // A seat bound to a data accessory reads no pad (rev 7): the console sees
+    // the accessory alone on that port. Decided here, on the one path every
+    // mode shares, so neither a Sink nor a hub can leak a pad into it.
+    bool accessory_seat = false;
+    for (const AccessoryQueue& q : s->accessories_) accessory_seat |= q.seat == seat;
+    if (seat < RCORE_MAX_SEATS && !accessory_seat) {
         if (s->input_source_) s->input_source_(seat, pad);
         else s->sink_.input(seat, pad);
     }
@@ -170,6 +220,30 @@ void HostSession::h_frame_rate(void* ctx, std::uint32_t num, std::uint32_t den) 
     // num or den of 0 withdraws a stated rate; pass both through as 0.
     if (!num || !den) num = den = 0;
     self(ctx)->sink_.frame_rate(num, den);
+}
+
+std::size_t HostSession::h_accessory_poll(void* ctx, std::uint32_t seat, std::uint32_t slot,
+                                          void* buf, std::size_t cap) {
+    AccessoryQueue* q = self(ctx)->accessory_queue(seat, slot);
+    if (!q) return 0;
+    if (q->cursor >= q->frame.size()) {
+        // The drain is complete. Rewind, so a second drain in this frame --
+        // a resimulation, say -- sees the same sequence (the frame's bytes
+        // are stable until begin_frame_accessories()).
+        q->cursor = 0;
+        return 0;
+    }
+    const std::vector<std::uint8_t>& m = q->frame[q->cursor];
+    if (!buf || cap < m.size()) return m.size(); // too small: the size needed, nothing taken
+    std::memcpy(buf, m.data(), m.size());
+    ++q->cursor;
+    return m.size();
+}
+
+void HostSession::h_accessory_notify(void* ctx, std::uint32_t seat, std::uint32_t slot,
+                                     const void* data, std::size_t len) {
+    if (!data && len) return;
+    self(ctx)->sink_.accessory_notify(seat, slot, data, len);
 }
 
 std::uint64_t HostSession::h_wall_clock(void* ctx) {
