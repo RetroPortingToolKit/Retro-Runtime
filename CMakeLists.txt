@@ -152,7 +152,7 @@ if(RETRO_RUNTIME_TOOLS)
     set_target_properties(rcore_fake_core PROPERTIES PREFIX "" OUTPUT_NAME fake_core
                           C_VISIBILITY_PRESET hidden)
     file(GENERATE OUTPUT $<TARGET_FILE_DIR:rcore_fake_core>/fake_core.rcore.toml CONTENT
-"# Written by CMake for the rcore_fake_core test fixture.\n\n[core]\nabi_major       = 0\ndraft_revision  = 5\nid              = \"fake\"\nversion         = \"1.0\"\nlibrary         = \"$<TARGET_FILE_NAME:rcore_fake_core>\"\nplatforms       = [\"test\"]\ncapabilities    = [\"run_frame\", \"savestate\"]\n\n[build]\nengine_commit   = \"\"\nengine_dirty    = false\ntoolchain       = \"\"\ngenerated_utc   = \"\"\n")
+"# Written by CMake for the rcore_fake_core test fixture.\n\n[core]\nabi_major       = 0\ndraft_revision  = 7\nid              = \"fake\"\nversion         = \"1.0\"\nlibrary         = \"$<TARGET_FILE_NAME:rcore_fake_core>\"\nplatforms       = [\"test\"]\ncapabilities    = [\"run_frame\", \"savestate\", \"accessory_data\"]\n\n[build]\nengine_commit   = \"\"\nengine_dirty    = false\ntoolchain       = \"\"\ngenerated_utc   = \"\"\n")
 
     # The same core built as a generic one: GAME_PACKAGE, load() requires the
     # fixture package (tests/fake_package.txt). Its sidecar has no [title]: a
@@ -189,7 +189,7 @@ if(RETRO_RUNTIME_TOOLS)
     # probe_runner: what a host reads to choose and verify a runner.
     add_test(NAME runner_probe COMMAND retro-core-link-test --probe $<TARGET_FILE:retro-core-runner>)
     set_tests_properties(runner_probe PROPERTIES PASS_REGULAR_EXPRESSION
-        "probe: version ${RETRO_RUNTIME_VERSION}, link [0-9]+\\.[0-9]+, rcore ABI [0-9]+, compatible, game_package 1, describe 1")
+        "probe: version ${RETRO_RUNTIME_VERSION}, link [0-9]+\\.[0-9]+, rcore ABI [0-9]+, compatible, game_package 1, describe 1, accessory_data 1")
     # A crash mid-session: the runner dies at frame 5 with no unload. The hub
     # must see it end and still write the save as frames 1-4 left it -- the
     # save memory is the hub's (docs/CORE_LINK.md).
@@ -238,6 +238,23 @@ if(RETRO_RUNTIME_TOOLS)
     endforeach()
     # --describe: the fake cores' declarations as TAB records, without --rom;
     # and the refusals (--package for a plain core, a core that is not there).
+    # Accessory data (rev 7, link 2.1): the VRU on fake_core, headless from a
+    # script and over the link, with the frame each message lands in; and the
+    # refusals (a core without the type, a seat the runner does not have).
+    foreach(_case headless link replay refused_type refused_seat script_unbound)
+        add_test(NAME runner_accessory_${_case}
+            COMMAND ${CMAKE_COMMAND}
+                    "-DEMULATOR=${CMAKE_CROSSCOMPILING_EMULATOR}"
+                    -DCASE=${_case}
+                    -DLINK_TEST=$<TARGET_FILE:retro-core-link-test>
+                    -DRUNNER=$<TARGET_FILE:retro-core-runner>
+                    -DPKG_CORE=$<TARGET_FILE:rcore_fake_pkg_core>
+                    -DPLAIN_CORE=$<TARGET_FILE:rcore_fake_core>
+                    -DPACKAGE=${CMAKE_CURRENT_SOURCE_DIR}/tests/fake_package.txt
+                    -DROM=${CMAKE_CURRENT_SOURCE_DIR}/LICENSE
+                    -DOUT=${CMAKE_CURRENT_BINARY_DIR}/test-accessory-${_case}
+                    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/accessory_test.cmake)
+    endforeach()
     foreach(_case plain package package_none unwanted no_core)
         add_test(NAME runner_describe_${_case}
             COMMAND ${CMAKE_COMMAND}

@@ -23,6 +23,18 @@
  * type, every flag, a NULL default and description, and a TAB, LF, CR and
  * backslash inside a field are all exercised.
  *
+ * It declares ACCESSORY_DATA and one accessory type, n64.vru (rev 7), on any
+ * seat's slot 0 -- the type the runner's --vruN binds -- so the host side of
+ * accessory_poll / accessory_notify can be driven (tests/accessory_test.cmake).
+ * Each frame it drains the poll for every bound (seat, slot), logging
+ *   FAKE_ACCESSORY frame=K seat=S slot=L <bytes>
+ * per message and answering each with a notify, {"echo":<bytes>,"frame":K};
+ * then drains again and logs FAKE_ACCESSORY_UNSTABLE at ERROR if the second
+ * drain differs from the first (the contract: stable for the frame). It also
+ * logs FAKE_VRU_SEAT seat=S connected=C each frame for a bound seat, which
+ * the host must report as 0. The package build declares none of this, so a
+ * core WITHOUT the type exists for the refusals.
+ *
  * Built with FAKE_GAME_PACKAGE it is fake_pkg_core: core id "fake_pkg", it
  * also declares GAME_PACKAGE, and load() requires package_path to name a
  * readable file whose first line is FAKE_PACKAGE_MAGIC (tests/fake_package.txt),
@@ -61,7 +73,80 @@ static rcore_save_region k_regions[1];
 #  define FAKE_PACKAGE_MAGIC "rcore fake game package"
 #else
 #  define FAKE_ID "fake"
-#  define FAKE_CAPS (RCORE_CAP_RUN_FRAME | RCORE_CAP_SAVESTATE)
+#  define FAKE_CAPS (RCORE_CAP_RUN_FRAME | RCORE_CAP_SAVESTATE | RCORE_CAP_ACCESSORY_DATA)
+#  define FAKE_ACCESSORY_DATA 1
+#endif
+
+#if defined(FAKE_ACCESSORY_DATA)
+#  define MAX_BOUND 8
+#  define MAX_MSG 65536
+static uint32_t g_bound_seat[MAX_BOUND], g_bound_slot[MAX_BOUND];
+static unsigned g_bound;
+static char g_msg[MAX_MSG], g_msg2[MAX_MSG];
+
+static const rcore_accessory_type k_accessory_types[] = {
+    {sizeof(rcore_accessory_type), RCORE_ACC_FLAG_NETPLAY, 0xF, 0x1, "n64.vru", "VRU Microphone",
+     NULL},
+};
+
+static const rcore_accessory_type* accessory_types(uint32_t* count) {
+    *count = sizeof k_accessory_types / sizeof k_accessory_types[0];
+    return k_accessory_types;
+}
+
+static int host_has_accessory_data(void) {
+    return g_host->struct_size >= offsetof(rcore_host_api, accessory_notify) + sizeof(void*) &&
+           g_host->accessory_poll && g_host->accessory_notify;
+}
+
+/* Drain one bound accessory: log each message and echo it back; then drain
+ * again and compare, which is the contract's "stable for the frame". */
+static void drain_accessory(uint32_t seat, uint32_t slot) {
+    char line[MAX_MSG + 96];
+    size_t sizes[64];
+    unsigned count = 0, i;
+    size_t n;
+    if (!host_has_accessory_data()) return;
+    while ((n = g_host->accessory_poll(g_host->host_ctx, seat, slot, g_msg, sizeof g_msg)) != 0) {
+        if (n > sizeof g_msg) {
+            g_host->log(g_host->host_ctx, RCORE_LOG_ERROR, "FAKE_ACCESSORY message too large");
+            return;
+        }
+        snprintf(line, sizeof line, "FAKE_ACCESSORY frame=%llu seat=%u slot=%u %.*s", g_frames,
+                 seat, slot, (int)n, g_msg);
+        g_host->log(g_host->host_ctx, RCORE_LOG_INFO, line);
+        snprintf(line, sizeof line, "{\"echo\":%.*s,\"frame\":%llu}", (int)n, g_msg, g_frames);
+        g_host->accessory_notify(g_host->host_ctx, seat, slot, line, strlen(line));
+        if (count < sizeof sizes / sizeof sizes[0]) sizes[count] = n;
+        ++count;
+    }
+    /* The second drain must repeat the first, message for message. */
+    for (i = 0; i < count; ++i) {
+        n = g_host->accessory_poll(g_host->host_ctx, seat, slot, g_msg2, sizeof g_msg2);
+        if (i < sizeof sizes / sizeof sizes[0] && n != sizes[i]) {
+            snprintf(line, sizeof line, "FAKE_ACCESSORY_UNSTABLE frame=%llu message %u: %zu then %zu bytes",
+                     g_frames, i, sizes[i], n);
+            g_host->log(g_host->host_ctx, RCORE_LOG_ERROR, line);
+            return;
+        }
+    }
+    if (count && g_host->accessory_poll(g_host->host_ctx, seat, slot, g_msg2, sizeof g_msg2) != 0) {
+        snprintf(line, sizeof line, "FAKE_ACCESSORY_UNSTABLE frame=%llu: the second drain is longer",
+                 g_frames);
+        g_host->log(g_host->host_ctx, RCORE_LOG_ERROR, line);
+    }
+}
+
+static void bound_seat_pad(uint32_t seat) {
+    char line[96];
+    rcore_pad pad;
+    memset(&pad, 0, sizeof pad);
+    pad.struct_size = sizeof pad;
+    g_host->input_get(g_host->host_ctx, seat, &pad);
+    snprintf(line, sizeof line, "FAKE_VRU_SEAT seat=%u connected=%u buttons=%u", seat,
+             (unsigned)pad.connected, (unsigned)pad.buttons);
+    g_host->log(g_host->host_ctx, RCORE_LOG_INFO, line);
+}
 #endif
 
 static const rcore_core_info k_info = {
@@ -135,9 +220,22 @@ static rcore_result load(const rcore_load_params* params, const rcore_save_regio
         const rcore_result rc = check_package(params);
         if (rc != RCORE_OK) return rc;
     }
-#else
-    (void)params;
 #endif
+#if defined(FAKE_ACCESSORY_DATA)
+    {
+        uint32_t i;
+        g_bound = 0;
+        for (i = 0; i < params->accessory_count && g_bound < MAX_BOUND; ++i) {
+            const rcore_accessory_binding* b = &params->accessories[i];
+            if (b->type_id && strcmp(b->type_id, "n64.vru") == 0) {
+                g_bound_seat[g_bound] = b->seat;
+                g_bound_slot[g_bound] = b->slot;
+                ++g_bound;
+            }
+        }
+    }
+#endif
+    (void)params;
     memset(k_regions, 0, sizeof k_regions);
     k_regions[0].struct_size = sizeof(rcore_save_region);
     k_regions[0].kind = RCORE_SAVE_BATTERY;
@@ -169,6 +267,16 @@ static void die_now(void) {
 static rcore_result run_frame(void) {
     ++g_frames;
     if (g_crash_at && g_frames == g_crash_at) die_now();
+#if defined(FAKE_ACCESSORY_DATA)
+    {
+        /* At the frame boundary, before the frame runs (rev 7). */
+        unsigned i;
+        for (i = 0; i < g_bound; ++i) {
+            drain_accessory(g_bound_seat[i], g_bound_slot[i]);
+            bound_seat_pad(g_bound_seat[i]);
+        }
+    }
+#endif
     if (!g_battery) g_battery = (unsigned char*)g_host->save_memory(g_host->host_ctx, "battery");
     if (g_battery) g_battery[g_frames % 64] = (unsigned char)(g_frames & 0xff);
     memset(g_pixels, (int)(g_frames & 0xff), sizeof g_pixels);
@@ -222,6 +330,9 @@ static void deinit(void) {}
 static const rcore_core_api k_api = {
     sizeof(rcore_core_api), 0, &k_info, opts, descs, init, load, run_frame, NULL,
     NULL, state_size, serialize, unserialize, unload, deinit,
+#if defined(FAKE_ACCESSORY_DATA)
+    accessory_types,
+#endif
 };
 
 RCORE_EXPORT const rcore_core_api* rcore_entry(uint32_t host_abi_major) {

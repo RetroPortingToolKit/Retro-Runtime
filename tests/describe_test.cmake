@@ -3,8 +3,10 @@
 # inputs below (tests/rcore_fake_core.c); stdout must be exactly these lines.
 # CASE picks the scenario:
 #
-#   plain          fake_core, no --rom: the records, byte for byte
-#   package        fake_pkg_core + --package: the same records, its own id
+#   plain          fake_core, no --rom: the records, byte for byte, with its
+#                  n64.vru accessory record
+#   package        fake_pkg_core + --package: the same records, its own id,
+#                  and no accessory (the package build declares none)
 #   package_none   fake_pkg_core without --package: still described
 #   unwanted       fake_core given --package: refused, exit 2
 #   no_core        a core that does not exist: refused, exit 2, stdout empty
@@ -37,6 +39,9 @@ function(expected id var)
         [=[input<T>1<T>0<T>0<T>A]=]
         [=[input<T>0<T>3<T>-1<T>C-Left]=]
         [=[input<T>0<T>1<T>0<T>Stick]=])
+    if(id STREQUAL "fake")
+        list(APPEND lines [=[accessory<T>n64.vru<T>VRU Microphone<T>netplay<T>f<T>1]=])
+    endif()
     string(JOIN "\n" text ${lines})
     string(REPLACE "<T>" "${TAB}" text "${text}")
     string(REPLACE "@ID@" "${id}" text "${text}")

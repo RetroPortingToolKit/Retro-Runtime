@@ -258,6 +258,9 @@ void test_envelope(const fs::path& dir) {
     id.package_sha256 = "p0";
     id.content_sha256 = "r0";
     id.accessories.push_back({0, 0, "n64.transfer_pak", "g0"});
+    // A data accessory (rev 7): no content, so its hash is empty and its
+    // header line ends in the comma -- `accessory=1,0,n64.vru,`.
+    id.accessories.push_back({1, 0, "n64.vru", ""});
     id.sim_options["cpu.overclock"] = "1";
     id.sim_options["region"] = std::nullopt;
     id.sim_options["note"] = "a=b\nc\\d"; // escaping survives
@@ -275,7 +278,9 @@ void test_envelope(const fs::path& dir) {
     CHECK(state::read_state(p, back, got, &err));
     CHECK(got == bytes && back.frame_number == 77 && back.thumb_w == 0);
     CHECK(back.identity.sim_options == id.sim_options);
-    CHECK(back.identity.accessories.size() == 1 && back.identity.accessories[0] == id.accessories[0]);
+    CHECK(back.identity.accessories.size() == 2 && back.identity.accessories[0] == id.accessories[0]);
+    CHECK(back.identity.accessories.size() == 2 && back.identity.accessories[1] == id.accessories[1]);
+    CHECK(back.identity.accessories.size() == 2 && back.identity.accessories[1].content_sha256.empty());
     CHECK(state::check_state(back, id, got).empty());
 
     auto refused = [&](state::StateIdentity running, const std::string& want) {
@@ -305,6 +310,13 @@ void test_envelope(const fs::path& dir) {
     refused(r, "content SHA-256 differs");
     r = id;
     r.accessories.clear();
+    refused(r, "accessories differ");
+    r = id;
+    r.accessories.pop_back(); // the VRU unplugged: a state taken with it is refused
+    refused(r, "accessories differ: the state has seat 0 slot 0 n64.transfer_pak g0; seat 1 slot 0 n64.vru, "
+               "this session has seat 0 slot 0 n64.transfer_pak g0");
+    r = id;
+    r.accessories[1].seat = 2; // the VRU on another seat
     refused(r, "accessories differ");
     r = id;
     r.sim_options["cpu.overclock"] = "0";
