@@ -36,12 +36,19 @@ namespace retro::corelink {
 // to 4x is 1280x960). The shared region's layout moved, so a 1.x peer is
 // refused at hello rather than reading frames at the wrong offsets.
 constexpr std::uint32_t kProtocolMajor = 2;
-constexpr std::uint32_t kProtocolMinor = 0;
+// 2.1 (2026-10-01): AccessoryData (hub -> runner) and AccessoryNotify
+// (runner -> hub), the bytes of a data accessory (rcore rev 7, docs/CORE_ABI.md
+// "Accessory data"). Append-only: two new message types, nothing grown.
+constexpr std::uint32_t kProtocolMinor = 1;
 // A link only comes up between peers of the same major, and a new major
 // carries every message the old one had: savestates arrived in 1.1, so a 2.x
 // peer has them whatever its minor. Gate on this, never on the minor alone.
 constexpr bool link_has_savestates(std::uint32_t peer_minor) {
     return kProtocolMajor > 1 || peer_minor >= 1;
+}
+// Accessory data arrived in 2.1.
+constexpr bool link_has_accessory_data(std::uint32_t peer_minor) {
+    return kProtocolMajor > 2 || peer_minor >= 1;
 }
 constexpr char kMagic[8] = {'R', 'C', 'L', 'I', 'N', 'K', '1', '\0'};
 
@@ -127,12 +134,14 @@ enum class Msg : std::uint32_t {
     Event = 6,       // a report(): BRIDGE / DISPATCH_MISS / FAULT
     Exiting = 7,     // the runner is stopping on purpose; the reason follows
     StateDone = 8,   // 1.1: how the last SaveState / LoadState went
+    AccessoryNotify = 9, // 2.1: a data accessory's bytes for the hub (accessory_notify)
     // hub -> runner
     SavesFilled = 64, // every region filled from its file; the seats at power-on
     Grant = 65,       // run exactly one frame, with these pads
     Quit = 66,        // unload, deinit, exit 0
     SaveState = 67,   // 1.1: serialize now, into an envelope at this path
     LoadState = 68,   // 1.1: check the envelope at this path, then unserialize
+    AccessoryData = 69, // 2.1: a data accessory's bytes for the core (accessory_poll)
 };
 
 struct MsgHeader {
@@ -233,9 +242,27 @@ struct StateDoneMsg {
     char detail[512];     // why not, naming both values (the load rule's words)
 };
 
-constexpr std::size_t kMaxMsgSize = sizeof(SaveRegionsMsg); // the largest message
-static_assert(kMaxMsgSize >= sizeof(LogMsg) && kMaxMsgSize >= sizeof(StateRequestMsg) &&
-                  kMaxMsgSize >= sizeof(StateDoneMsg) && kMaxMsgSize >= sizeof(EventMsg),
+// 2.1. One whole message of a data accessory (rcore rev 7): hub -> runner as
+// AccessoryData, queued for the next granted frame's accessory_poll; runner ->
+// hub as AccessoryNotify, straight from the core's accessory_notify. The bytes
+// are the accessory type's own format (a VRU's are one JSON line). A packet is
+// sent at offsetof(data) + len, never the whole struct: the hub may send up to
+// kMaxAccessoryBytes in one message, which holds a 255-word VRU dictionary.
+constexpr std::uint32_t kMaxAccessoryBytes = 65536;
+struct AccessoryDataMsg {
+    MsgHeader h;          // AccessoryData or AccessoryNotify
+    std::uint32_t seat;
+    std::uint32_t slot;
+    std::uint32_t len;    // bytes of `data` that are the message
+    std::uint32_t _pad;
+    char data[kMaxAccessoryBytes];
+};
+constexpr std::size_t kAccessoryMsgHeaderSize = offsetof(AccessoryDataMsg, data);
+
+constexpr std::size_t kMaxMsgSize = sizeof(AccessoryDataMsg); // the largest message
+static_assert(kMaxMsgSize >= sizeof(SaveRegionsMsg) && kMaxMsgSize >= sizeof(LogMsg) &&
+                  kMaxMsgSize >= sizeof(StateRequestMsg) && kMaxMsgSize >= sizeof(StateDoneMsg) &&
+                  kMaxMsgSize >= sizeof(EventMsg),
               "kMaxMsgSize must hold every message");
 
 // ---- the wire layout, pinned ------------------------------------------------
@@ -336,6 +363,13 @@ static_assert(offsetof(StateDoneMsg, request) == 8, "StateDoneMsg::request");
 static_assert(offsetof(StateDoneMsg, ok) == 12, "StateDoneMsg::ok");
 static_assert(offsetof(StateDoneMsg, bytes) == 16, "StateDoneMsg::bytes");
 static_assert(offsetof(StateDoneMsg, detail) == 24, "StateDoneMsg::detail");
+// 2.1
+static_assert(sizeof(AccessoryDataMsg) == 65560 && alignof(AccessoryDataMsg) == 4, "AccessoryDataMsg");
+static_assert(offsetof(AccessoryDataMsg, h) == 0, "AccessoryDataMsg::h");
+static_assert(offsetof(AccessoryDataMsg, seat) == 8, "AccessoryDataMsg::seat");
+static_assert(offsetof(AccessoryDataMsg, slot) == 12, "AccessoryDataMsg::slot");
+static_assert(offsetof(AccessoryDataMsg, len) == 16, "AccessoryDataMsg::len");
+static_assert(offsetof(AccessoryDataMsg, data) == 24, "AccessoryDataMsg::data");
 
 
 } // namespace retro::corelink

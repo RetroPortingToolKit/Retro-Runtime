@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <array>
+#include <deque>
 #include <map>
 #include <optional>
 #include <string>
@@ -38,6 +39,13 @@ struct LaunchSpec {
     // (runner_probe.hpp); an older runner takes seat 1 only. Its battery
     // save is save_files["tpakN"], the MBC3 clock save_files["tpakN.rtc"].
     std::array<std::string, 4> tpak_roms;
+    // Seat N's VRU microphone (argv --vruN), N = 1-4: the n64.vru data
+    // accessory (rcore rev 7), slot 0, no content. The runner must report
+    // accessory_data 1 (runner_probe.hpp) and the core must declare the type,
+    // or it exits 2 before Hello. That seat reads no pad: the runner reports
+    // it to the core as connected = 0 whatever the grants say. Its bytes go
+    // through send_accessory() / poll_accessory_notify().
+    std::array<bool, 4> vru_seats{};
     std::map<std::string, fs::path> save_files; // region id -> file
     // Regions not named above land here as <id>.sav. Empty = only the named
     // ones persist. (Region ids are only known once the core has loaded.)
@@ -73,6 +81,12 @@ struct StateResult {
 struct LinkLog {
     std::uint32_t level;
     std::string text;
+};
+
+// One message a data accessory sent the hub (link 2.1, accessory_notify).
+struct AccessoryNotify {
+    std::uint32_t seat = 0, slot = 0;
+    std::vector<std::uint8_t> bytes;
 };
 
 struct LinkEvent {
@@ -125,6 +139,19 @@ public:
     // The answer, once, when it has arrived. A runner that ends first
     // answers with a failure naming that.
     std::optional<StateResult> take_state_result();
+
+    // Accessory data (link 2.1, rcore rev 7; docs/CORE_ABI.md "Accessory
+    // data"). send_accessory() queues one whole message for the accessory at
+    // (seat, slot): the runner hands the core, through accessory_poll, every
+    // message that arrived before a frame's grant, during that frame. So a
+    // message sent between grant K's FrameDone and grant K+1 is seen in frame
+    // K+1. False without sending when the session cannot: a 2.0 runner, a
+    // core without CAP_ACCESSORY_DATA, more than kMaxAccessoryBytes.
+    bool accessory_data_supported() const;
+    bool send_accessory(std::uint32_t seat, std::uint32_t slot, const void* data, std::size_t len);
+    // The next message a data accessory sent the hub (accessory_notify), in
+    // the order they arrived; nullopt when none is waiting. pump() collects them.
+    std::optional<AccessoryNotify> poll_accessory_notify();
 
     // Swaps in the newest picture if there is one the hub has not taken.
     bool take_frame();
@@ -184,6 +211,7 @@ private:
     bool state_pending_ = false;
     StateResult state_request_;
     std::optional<StateResult> state_result_;
+    std::deque<AccessoryNotify> notifies_;
     int exit_code_ = 0;
     std::string exit_reason_;
 };

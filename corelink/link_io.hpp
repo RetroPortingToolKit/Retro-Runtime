@@ -7,6 +7,7 @@
 #include "transport.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <vector>
 
@@ -39,6 +40,39 @@ bool as_msg(const std::vector<unsigned char>& buf, M& out, std::size_t min_size 
     if (buf.size() < min_size || min_size < sizeof(MsgHeader)) return false;
     std::memset(&out, 0, sizeof(M));
     std::memcpy(&out, buf.data(), buf.size() < sizeof(M) ? buf.size() : sizeof(M));
+    return true;
+}
+
+// 2.1. A data accessory's bytes, sent at their own length: the header fields
+// and `len` bytes, never the whole struct. False when `len` is more than one
+// message carries (the sender keeps the bytes; nothing partial goes out).
+inline bool send_accessory_msg(Channel& ch, Msg type, std::uint32_t seat, std::uint32_t slot,
+                               const void* data, std::size_t len) {
+    if (len > kMaxAccessoryBytes) return false;
+    std::vector<unsigned char> pkt(kAccessoryMsgHeaderSize + len);
+    AccessoryDataMsg head{};
+    head.h.type = type;
+    head.h.size = static_cast<std::uint32_t>(pkt.size());
+    head.seat = seat;
+    head.slot = slot;
+    head.len = static_cast<std::uint32_t>(len);
+    std::memcpy(pkt.data(), &head, kAccessoryMsgHeaderSize);
+    if (len) std::memcpy(pkt.data() + kAccessoryMsgHeaderSize, data, len);
+    return send_packet(ch, pkt.data(), pkt.size());
+}
+
+// The reverse: the fields, and the bytes `len` says are there. False for a
+// packet shorter than its own `len` claims.
+inline bool as_accessory_msg(const std::vector<unsigned char>& buf, std::uint32_t& seat,
+                             std::uint32_t& slot, std::vector<std::uint8_t>& bytes) {
+    if (buf.size() < kAccessoryMsgHeaderSize) return false;
+    AccessoryDataMsg head{};
+    std::memcpy(&head, buf.data(), kAccessoryMsgHeaderSize);
+    if (head.len > kMaxAccessoryBytes || buf.size() < kAccessoryMsgHeaderSize + head.len) return false;
+    seat = head.seat;
+    slot = head.slot;
+    bytes.assign(buf.begin() + static_cast<std::ptrdiff_t>(kAccessoryMsgHeaderSize),
+                 buf.begin() + static_cast<std::ptrdiff_t>(kAccessoryMsgHeaderSize + head.len));
     return true;
 }
 

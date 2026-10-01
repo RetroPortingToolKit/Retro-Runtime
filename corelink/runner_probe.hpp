@@ -25,6 +25,10 @@ struct RunnerVersion {
     // Seats that take a Transfer Pak (--tpak1-rom .. --tpakN-rom): 4, or 1
     // for a runner from before seats 2-4, which prints no transfer_pak_seats.
     std::uint32_t transfer_pak_seats = 1;
+    // 1 when the runner takes --vru1 .. --vru4 and carries accessory data over
+    // the link (2.1; CORE_RUNNER.md); 0 for a runner from before it, which
+    // prints no accessory_data line.
+    std::uint32_t accessory_data = 0;
     // 1 when the runner was built with recomp-net (--net-*; CORE_RUNNER.md,
     // "Netplay"); 0 for one without, or from before netplay.
     std::uint32_t netplay = 0;

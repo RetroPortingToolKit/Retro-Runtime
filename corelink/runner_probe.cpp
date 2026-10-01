@@ -76,6 +76,9 @@ bool probe_runner(const fs::path& runner, RunnerVersion& out, std::string* error
     if (fields.count("transfer_pak_seats") && !num("transfer_pak_seats", v.transfer_pak_seats)) {
         return fail("--version printed an unreadable transfer_pak_seats line");
     }
+    if (fields.count("accessory_data") && !num("accessory_data", v.accessory_data)) {
+        return fail("--version printed an unreadable accessory_data line");
+    }
     const std::string link = fields["link_protocol"];
     const auto dot = link.find('.');
     bool ok = !v.version.empty() && dot != std::string::npos && num("rcore_abi_major", v.abi_major) &&

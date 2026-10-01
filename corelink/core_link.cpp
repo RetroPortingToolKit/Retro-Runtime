@@ -69,6 +69,9 @@ bool CoreLink::start(const LaunchSpec& spec, std::string* error) {
         args.push_back("--tpak" + std::to_string(seat + 1) + "-rom");
         args.push_back(spec_.tpak_roms[seat]);
     }
+    for (std::size_t seat = 0; seat < spec_.vru_seats.size(); ++seat) {
+        if (spec_.vru_seats[seat]) args.push_back("--vru" + std::to_string(seat + 1));
+    }
     args.insert(args.end(), spec_.extra_args.begin(), spec_.extra_args.end());
     sp.env = spec_.env;
     sp.log = runner_log();
@@ -202,6 +205,11 @@ void CoreLink::handle_packet(const std::vector<unsigned char>& buf,
             state_pending_ = false;
             break;
         }
+        case Msg::AccessoryNotify: {
+            AccessoryNotify n;
+            if (as_accessory_msg(buf, n.seat, n.slot, n.bytes)) notifies_.push_back(std::move(n));
+            break;
+        }
         default:
             break;
     }
@@ -243,6 +251,24 @@ bool CoreLink::request_state(Msg type, const fs::path& path) {
 
 bool CoreLink::request_save_state(const fs::path& path) { return request_state(Msg::SaveState, path); }
 bool CoreLink::request_load_state(const fs::path& path) { return request_state(Msg::LoadState, path); }
+
+bool CoreLink::accessory_data_supported() const {
+    return state_ == LinkState::Ready && link_has_accessory_data(identity_.protocol_minor) &&
+           (identity_.capabilities & RCORE_CAP_ACCESSORY_DATA);
+}
+
+bool CoreLink::send_accessory(std::uint32_t seat, std::uint32_t slot, const void* data,
+                              std::size_t len) {
+    if (!accessory_data_supported()) return false;
+    return send_accessory_msg(channel_, Msg::AccessoryData, seat, slot, data, len);
+}
+
+std::optional<AccessoryNotify> CoreLink::poll_accessory_notify() {
+    if (notifies_.empty()) return std::nullopt;
+    AccessoryNotify n = std::move(notifies_.front());
+    notifies_.pop_front();
+    return n;
+}
 
 std::optional<StateResult> CoreLink::take_state_result() {
     std::optional<StateResult> r;

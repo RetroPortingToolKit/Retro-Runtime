@@ -8,7 +8,16 @@
 // menu takes them (link 1.1):
 //   --state-save-at K:PATH   after frame K, save an envelope to PATH
 //   --state-load-at K:PATH   after frame K, load the envelope at PATH
-// Each prints one `state:` line with the runner's answer. The last picture's
+// Each prints one `state:` line with the runner's answer. Accessory data
+// (link 2.1) the way a hub sends it:
+//   --vruN                        the VRU microphone on seat N (1-4)
+//   --accessory-send K:SEAT:SLOT:BYTES   before grant K, send BYTES to the
+//                                 accessory at (SEAT, SLOT); the core sees
+//                                 them in frame K
+// Every message an accessory sends back prints as
+//   accessory: notify SEAT SLOT BYTES
+// in arrival order, as soon as the pump that carried it returns.
+// The last picture's
 // first byte is printed (`picture:`): the fake core paints frame k as k & 0xff,
 // so it shows where a load landed.
 // Outputs in --out: core.log, events.tsv and state_hash.tsv come from the
@@ -78,6 +87,12 @@ int main(int argc, char** argv) {
         std::string path;
     };
     std::vector<StateOp> state_ops;
+    struct AccessorySend {
+        std::uint64_t before_frame;
+        std::uint32_t seat, slot;
+        std::string bytes;
+    };
+    std::vector<AccessorySend> sends;
     auto state_op = [&](const std::string& v, bool save) {
         const auto colon = v.find(':');
         if (colon == std::string::npos) die("--state-save-at / --state-load-at K:PATH");
@@ -95,10 +110,10 @@ int main(int argc, char** argv) {
             std::string err;
             if (!probe_runner(utf8_path(val()), v, &err)) die(err);
             std::printf("probe: version %s, link %u.%u, rcore ABI %u, %s, game_package %u, "
-                        "describe %u\n",
+                        "describe %u, accessory_data %u\n",
                         v.version.c_str(), v.link_major, v.link_minor, v.abi_major,
                         v.compatible() ? "compatible" : "NOT compatible with this host",
-                        v.game_package, v.describe);
+                        v.game_package, v.describe, v.accessory_data);
             return 0;
         } else if (a == "--runner") spec.runner = utf8_path(val());
         else if (a == "--core") spec.core = utf8_path(val());
@@ -116,6 +131,19 @@ int main(int argc, char** argv) {
             else if (what == "-save") spec.save_files[id] = utf8_path(val());
             else if (what == "-rtc") spec.save_files[id + ".rtc"] = utf8_path(val());
             else die("unknown argument " + a);
+        }
+        else if (a.size() == 6 && a.compare(0, 5, "--vru") == 0 && a[5] >= '1' && a[5] <= '4') {
+            spec.vru_seats[static_cast<std::size_t>(a[5] - '1')] = true;
+        } else if (a == "--accessory-send") { // K:SEAT:SLOT:BYTES, BYTES may hold colons
+            const std::string v = val();
+            const auto c1 = v.find(':');
+            const auto c2 = c1 == std::string::npos ? c1 : v.find(':', c1 + 1);
+            const auto c3 = c2 == std::string::npos ? c2 : v.find(':', c2 + 1);
+            if (c3 == std::string::npos) die("--accessory-send K:SEAT:SLOT:BYTES");
+            sends.push_back({std::strtoull(v.substr(0, c1).c_str(), nullptr, 10),
+                             static_cast<std::uint32_t>(std::strtoul(v.substr(c1 + 1, c2 - c1 - 1).c_str(), nullptr, 10)),
+                             static_cast<std::uint32_t>(std::strtoul(v.substr(c2 + 1, c3 - c2 - 1).c_str(), nullptr, 10)),
+                             v.substr(c3 + 1)});
         }
         else if (a == "--save") { // <region id>=<file>
             const std::string kv = val();
@@ -182,9 +210,30 @@ int main(int argc, char** argv) {
     std::printf("link: %s %s sha256 %s draft %u%s\n", id.core_id.c_str(), id.core_version.c_str(),
                 id.sha256.c_str(), id.draft_revision, id.engine_dirty ? " (engine dirty)" : "");
 
+    // What the accessories said, printed as soon as the pump that carried it
+    // returns, so the order against `state:` lines is the order on the wire.
+    auto print_notifies = [&] {
+        while (const auto n = link.poll_accessory_notify()) {
+            std::printf("accessory: notify %u %u %.*s\n", n->seat, n->slot,
+                        static_cast<int>(n->bytes.size()),
+                        reinterpret_cast<const char*>(n->bytes.data()));
+        }
+    };
+
     // ---- the same frames headless mode runs, one grant each -----------------
     bool ok = true;
     for (std::uint64_t k = 1; k <= frames && ok; ++k) {
+        for (const AccessorySend& snd : sends) {
+            if (snd.before_frame != k) continue;
+            if (!link.send_accessory(snd.seat, snd.slot, snd.bytes.data(), snd.bytes.size())) {
+                std::printf("accessory: send before frame %llu not sent (link %u.%u, core %s "
+                            "accessory_data)\n",
+                            static_cast<unsigned long long>(k), kProtocolMajor,
+                            link.identity().protocol_minor,
+                            (link.identity().capabilities & RCORE_CAP_ACCESSORY_DATA) ? "declares"
+                                                                                      : "lacks");
+            }
+        }
         rcore_pad pads[RCORE_MAX_SEATS]{};
         for (auto& p : pads) p.struct_size = sizeof(rcore_pad);
         if (seat0) {
@@ -195,6 +244,7 @@ int main(int argc, char** argv) {
         }
         if (!link.grant(pads)) die("grant " + std::to_string(k) + " refused");
         while (link.state() == LinkState::Ready && link.frames_done() < k) link.pump(100);
+        print_notifies();
         if (link.state() != LinkState::Ready) ok = false;
         link.take_frame();
         std::int16_t sink[4096];
