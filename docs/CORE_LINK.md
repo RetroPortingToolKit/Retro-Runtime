@@ -56,6 +56,13 @@ messages. It reset the unreleased development counter, which had reached 3.
 **1.1** (2026-09-26) adds savestates: `SaveState` and `LoadState` (hub to
 runner) and `StateDone` (runner to hub), described under "Savestates" below.
 
+**2.0** (2026-09-30) grows the frame slots to 2048×1536 and moves the shared
+region's layout: a major, so a 1.x peer is refused at hello.
+
+**2.1** (2026-10-01) adds accessory data (rcore rev 7): `AccessoryData = 69`
+(hub to runner) and `AccessoryNotify = 9` (runner to hub), described under
+"Accessory data" below. Two new message types, nothing grown.
+
 ## A session
 
 ```
@@ -112,6 +119,30 @@ hub                                    runner
   every savestate scenario diverged. That was found by the byte comparison
   below and is fixed in protocol version 2. The general rule is now in
   `CORE_ABI.md`.
+- **Accessory data (2.1)** rides the control channel, one whole message per
+  packet, both ways as `AccessoryDataMsg`: `{seat u32, slot u32, len u32,
+  pad u32, data[len]}` after the header, sent at `offsetof(data) + len`,
+  never the whole struct; `len` is at most `kMaxAccessoryBytes` (65536, a
+  255-word VRU dictionary). The bytes are the accessory type's own format
+  (`CORE_ABI.md`, "Accessory data"; a VRU's is one JSON line).
+  - **Hub to runner, `AccessoryData`** (`CoreLink::send_accessory`): queued
+    in the runner for the accessory at (seat, slot). Every message that
+    arrived before a frame's `Grant` is what `accessory_poll` hands the core
+    during that frame -- so a message sent after `FrameDone(k)` and before
+    `Grant(k+1)` is seen in frame k+1, and the sequence is stable for that
+    frame, as the grant's pads are. The runner reads nothing from the hub
+    while a frame runs, so nothing can land mid-frame. A message for a
+    (seat, slot) nothing is plugged into is dropped and said once in
+    `runner.log`. The seat is plugged through argv: `LaunchSpec::vru_seats`
+    becomes `--vruN`, and the runner exits 2 before `Hello` when the core
+    does not declare the type.
+  - **Runner to hub, `AccessoryNotify`** (`CoreLink::poll_accessory_notify`,
+    collected by `pump()` in arrival order): sent the moment the core calls
+    `accessory_notify`, at any point of a frame.
+  - **A 2.0 runner never receives `AccessoryData`:** the hub asks
+    `accessory_data_supported()` first (the session's minor, and the core's
+    `CAP_ACCESSORY_DATA`), and `probe_runner` reads `accessory_data` from
+    `--version` before starting one with a VRU.
 - **Frames go through a lock-free triple buffer.** The runner owns the back
   slot, the hub owns the front slot, and one atomic `middle` with a fresh bit is
   exchanged between them. Neither side waits, and neither can touch the slot
@@ -202,6 +233,7 @@ All on `pokemonstadium_core.so` built clean from n64lle `ffa84cfc`.
   Library launch itself exists: see `CORE_LIBRARY.md`.
 - **Netplay through the runner** (rev 4).
 - **Options UI.** Options come only from `--opt`.
-- **Accessory binding UI, per-seat remapping, hot-plug.**
+- **Accessory binding UI, per-seat remapping, hot-plug.** The VRU's data
+  path exists (2.1); the hub's recognizer and its pak dropdown do not yet.
 - **The hub on macOS and Windows.** Retro Launcher builds `hub_play.cpp` only on
   Linux.

@@ -8,7 +8,7 @@ title's core.
 
 | Path | What |
 |---|---|
-| `include/rcore/rcore.h` | The host ↔ core contract. A core is a shared library exporting one symbol, `rcore_entry`. Draft revision 5, `RCORE_ABI_MAJOR 0`. |
+| `include/rcore/rcore.h` | The host ↔ core contract. A core is a shared library exporting one symbol, `rcore_entry`. Draft revision 7, `RCORE_ABI_MAJOR 0`. |
 | `corelink/` | The host ↔ runner link: its protocol, and `retro_corelink`, the client a host embeds. |
 | `overlay/` | `retro_overlay`: what a host draws over a running core. It covers FPS, TURBO, the volume meter, toasts and the save-state browser, and looks the same for every core. |
 | `state/` | `retro_state`: the savestate envelope. The runner writes and checks it; hosts list it. |
@@ -76,8 +76,8 @@ Three contracts, each with a major that must match and append-only minors:
 
 | Contract | Where | Current |
 |---|---|---|
-| rcore ABI | `RCORE_ABI_MAJOR` / `RCORE_DRAFT_REVISION` | 0 (draft), revision 5 |
-| Link protocol | `kProtocolMajor` / `kProtocolMinor` | 1.1 (savestates) |
+| rcore ABI | `RCORE_ABI_MAJOR` / `RCORE_DRAFT_REVISION` | 0 (draft), revision 7 |
+| Link protocol | `kProtocolMajor` / `kProtocolMinor` | 2.1 (accessory data) |
 | Sidecar manifest | `abi_major`, `draft_revision` | follows the ABI |
 
 The runner can therefore update separately from hosts and cores:

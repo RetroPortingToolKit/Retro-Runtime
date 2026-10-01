@@ -58,6 +58,37 @@ This page covers what exists and how it is checked.
    `a b z l r start dup ddown dleft dright` and, since 2026-09-29, `cup cdown
    cleft cright`: the right stick at full deflection (+y up), where n64lle
    reads its C buttons.
+
+   **Data accessories** (`--vruN`, N = 1-4; 2026-10-01, rcore rev 7,
+   `CORE_ABI.md` "Accessory data"). `--vruN` plugs the VRU microphone, the
+   `n64.vru` data accessory, into seat N-1, slot 0, with no content: an
+   `rcore_accessory_binding` whose `content_path` is NULL, after the Transfer
+   Paks in `rcore_load_params.accessories`. Headless and `--link` alike it is
+   refused (exit 2, naming the core and the type) unless the core declares
+   `accessory_data` and lists `n64.vru` in `accessory_types()` with that seat
+   and slot in its masks -- this is the first thing the runner reads
+   `accessory_types()` for. A `NETPLAY` type is also refused in a netplay
+   session (`--net-*`): its bytes are not replicated to the peers yet.
+   - **The bound seat reads no pad.** `input_get` for that seat answers
+     `connected = 0`, decided in `HostSession` on the one input path every
+     mode shares, so neither the headless script nor a hub's grant can leak a
+     pad into a port the console reads as the VRU alone.
+   - **`--accessory-script <file>`** feeds the accessory headless: one
+     `frame<TAB>seat<TAB>slot<TAB>bytes` line per message (`#` lines and
+     blank lines skipped), each one part of the named frame's sequence --
+     what `accessory_poll` hands the core during that frame, in file order,
+     and on a `--replay-at` second pass the same again. A line for a
+     (seat, slot) nothing is plugged into is refused before the core runs.
+     Everything the core sends back through `accessory_notify` prints to
+     stderr as `ACCESSORY_NOTIFY <seat> <slot> <bytes>`, in order, as it
+     happens.
+   - **Queues** (`host_session.*`): per (seat, slot), what arrived before a
+     frame began is that frame's sequence; `accessory_poll` hands it out one
+     message per call, returns 0 at the end and rewinds, so a drain repeated
+     within the frame sees the same sequence; the next frame boundary drops
+     what the core did not take. Over the link the hub's `AccessoryData`
+     messages are the arrivals (`CORE_LINK.md`, 2.1), and `accessory_notify`
+     goes to the hub as `AccessoryNotify` the moment the core calls it.
 5. **Savestates** (`runner/state_keeper.*`, 2026-09-26). The runner writes
    and checks the savestate envelope (`OVERLAY.md`, `CORE_ABI.md`
    "Savestates"). It holds every identity the load rule compares: the core's
@@ -79,9 +110,11 @@ This page covers what exists and how it is checked.
 
 `--version` prints the release version, commit, link protocol and rcore ABI
 compiled in, whether `--gl` is available, `game_package 1` (this runner
-takes `--package`), `describe 1` (this runner answers `--describe`) and
+takes `--package`), `describe 1` (this runner answers `--describe`),
 `transfer_pak_seats 4` (it takes `--tpak1-rom` to `--tpak4-rom`; a runner
-without the line takes seat 1 only), and exits 0 (`RELEASES.md`).
+without the line takes seat 1 only), `netplay 0|1` and `accessory_data 1`
+(it takes `--vru1` to `--vru4` and speaks link 2.1's accessory messages; a
+runner without the line takes neither), and exits 0 (`RELEASES.md`).
 
 Exit codes:
 
@@ -115,6 +148,7 @@ core	<core_id>	<core_version>	<platforms>
 option	<key>	<type>	<flags>	<has_default>	<default>	<int_min>	<int_max>	<label>	<description>
 value	<key>	<one enum value>
 input	<button>	<axis>	<axis_direction>	<label>
+accessory	<id>	<label>	<flags>	<seat_mask>	<slot_mask>
 ```
 
 - Every field escapes `\` as `\\`, TAB as `\t`, LF as `\n` and CR as `\r`, so a
@@ -131,8 +165,15 @@ input	<button>	<axis>	<axis_direction>	<label>
 - `<button>` is the `RCORE_PAD_*` bit in decimal (0 for an axis),
   `<axis>` is as declared (`RCORE_AXIS_*` + 1, or 0), and `<axis_direction>`
   is a signed decimal.
-- Options and inputs appear in declared order. `describe 1` is the format's
-  version.
+- `accessory` records (2026-10-01, with `accessory_data 1` in `--version`)
+  are the core's `accessory_types()`, in declared order: `<flags>` is a
+  comma-separated subset of `content,save,netplay`, in that order, or `-`;
+  `<seat_mask>` and `<slot_mask>` are lowercase hex without a prefix. A host
+  offers a seat's pak dropdown from these (the Transfer Pak, the VRU) rather
+  than guessing what the core takes where.
+- Options, inputs and accessories appear in declared order. `describe 1` is
+  the format's version; a new record TYPE does not change it, so a reader
+  skips a record whose first field it does not know.
 
 ## How it is checked
 
@@ -175,7 +216,24 @@ run through it yet.
 options and inputs cover every type and flag, NULL defaults and
 descriptions, and a TAB, LF, CR and backslash inside a field. Each case
 compares stdout byte for byte (`runner_describe_*`,
-`tests/describe_test.cmake`). **Run by hand 2026-09-26** on n64lle's generic
+`tests/describe_test.cmake`); `fake_core` declares `n64.vru`, so its
+`accessory` record is in the comparison, and `fake_pkg_core` declares none.
+
+**Accessory data** (2026-10-01) is checked by ctest only, on `fake_core`,
+which drains `accessory_poll` at every frame boundary, logs each message
+with its frame, echoes it back through `accessory_notify`, drains a second
+time to check the sequence repeats, and logs the bound seat's `connected`
+flag (`runner_accessory_*`, `tests/accessory_test.cmake`): a message named
+for frame 3 is seen in frame 3 and no other, headless from a script and over
+the link from `retro-core-link-test --accessory-send`; the echoes come back
+in order; a `--replay-at` second pass sees the same messages in the same
+frames; seat 0 reads `connected=0` in every frame although both the headless
+sink and the link test put a controller there (the mask was mutated out once
+to confirm both tests fail without it); and `--vru1` on a core without the
+type is refused, headless and over the link. The netplay refusal is not
+under ctest, because the suite builds without recomp-net. No real core has
+run with a VRU through this runner yet: n64lle's `n64.vru` is the hub's and
+the core's next step. **Run by hand 2026-09-26** on n64lle's generic
 `n64lle_core.so` (0.374.0, sidecar beside it): exit 0, 76 options, 16 enum
 values and 16 inputs, every record with its field count.
 
@@ -224,6 +282,9 @@ checkout>`; `--version` then says `netplay 1`, otherwise `netplay 0` and every
   silently first, so the network paces the hub. Savestate requests are
   refused during a match. A match that ends (refused, a player gone) exits 4
   with the reason.
+- **Refused:** a `NETPLAY` data accessory (`--vruN`) in a netplay session,
+  exit 2 before `init` -- its bytes are not replicated to the peers yet
+  (`CORE_ABI.md`, "Accessory data").
 - **Not built:** NAT traversal, a spectator seat, and play over a real network.
 
 ## Not built yet

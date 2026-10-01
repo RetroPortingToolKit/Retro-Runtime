@@ -116,6 +116,8 @@ gl 1
 game_package 1
 describe 1
 transfer_pak_seats 4
+netplay 0
+accessory_data 1
 ```
 
 A build outside a release says `version dev`. `game_package 1` (2026-09-26)
@@ -128,6 +130,11 @@ extracted binary (step 7).
 version 1 (`CORE_RUNNER.md`, "--describe"); a runner from before it prints
 no such line, and `probe_runner` reports 0. Like `game_package`, it is read
 from the binary, not the manifest.
+
+`accessory_data 1` (2026-10-01) means the runner takes `--vru1` to `--vru4`
+and carries a data accessory's bytes over link 2.1 (`CORE_RUNNER.md`,
+`CORE_LINK.md`); a runner from before it prints no such line, and
+`probe_runner` reports 0. Read from the binary, like the two above.
 
 ## The update rule, for a host
 
