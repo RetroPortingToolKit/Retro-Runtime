@@ -12,6 +12,7 @@ only the shape of the contract and why.
 | Rev | Date | Change |
 |---|---|---|
 | 1 | 2026-09-23 | First draft. |
+| 7 | 2026-10-01 | `accessory_poll` / `accessory_notify` on the host table and `RCORE_CAP_ACCESSORY_DATA`: bytes between the host and a plugged accessory whose input is not a pad, host->core drained at the frame boundary and stable for the frame, core->host for the host's UI. The first such accessory is `n64.vru`, the Voice Recognition Unit (n64lle PR #65 gave it a debug-port seam; Alex's ruling 2026-10-01: a seat's pak dropdown selects "VRU Microphone" and the hub owns the recognizer). |
 | 6 | 2026-09-29 | `net_row_from_pad` / `net_row_to_pad` and `rcore_net_row`: a core's own netplay input row. A row is 16 buttons and one 8-bit stick, and n64lle's C buttons ride `RCORE_AXIS_RX/RY`, so rev 4's "pads need no core hook" did not hold (amended at its claim site in `rcore.h`). Driven by the Direct-mode netplay work (Retro-Launcher `docs/NETPLAY_DIRECT.md`). |
 | 5 | 2026-09-25 | `set_frame_rate(num, den)` on the host table: the nominal frame rate as an exact fraction, stated after `load()` and whenever the guest reprograms its video timing. Closes the pacing gap the hub link found. |
 | 4 | 2026-09-25 | Alex's ruling that the runner owns netplay: `rb_snap_*`, `run_frame_resim` and `state_hash_parts` for `CAP_ROLLBACK`, mapped onto recomp-net's `RNetRbHost`; host `wall_clock_us`, so a clock cartridge stays deterministic. |
@@ -269,6 +270,39 @@ controller), `CONTENT | SAVE | NETPLAY`, extensions `.gb,.gbc`. `load()` reads
 the cartridge header, then declares `tpak<seat+1>` (battery RAM, `erase_value`
 0xFF) at exactly the header's size. MBC3 carts with a clock also get
 `tpak<seat+1>.rtc`.
+
+### Accessory data (rev 7)
+
+Some accessories are not pads and not content: a microphone, a barcode
+scanner. Their traffic goes through two host-table calls, gated by
+`RCORE_CAP_ACCESSORY_DATA`:
+
+- **host -> core, `accessory_poll(seat, slot, buf, cap)`.** The core drains
+  it at its frame boundary, before the frame runs, one whole message per
+  call, until it returns 0. The sequence is stable for the frame: it is what
+  the host held when the frame began, a drain repeated within the frame (a
+  resimulation) sees it again -- a return of 0 rewinds -- and what arrives
+  mid-frame waits for the next frame. So a netplay or replay host can hand
+  every peer the same bytes for the same frame, the way it hands input. A
+  core that polls anywhere else breaks DETERMINISTIC. (Netplay replication
+  of these bytes is not implemented yet: a `NETPLAY` data accessory is
+  refused in a netplay session until it is -- `retro-core-runner` exits 2
+  before `init`.)
+- **core -> host, `accessory_notify(seat, slot, data, len)`.** The device's
+  state for the host's UI, never guest-visible; any time in a frame.
+- **The format** is the accessory type's own, named in its docs. The host and
+  the core agree on it by the type id, not by this header.
+
+The VRU: type id `n64.vru`, label "VRU Microphone", `NETPLAY`, any seat, slot
+0, no content, no save. Its messages are newline-terminated JSON objects, the
+same as n64lle's `docs/VRU.md` commands minus the transport fields: host ->
+core `{"cmd":"vru_speech","epoch":E,"capture_id":C,"event":"start"|"progress"|"result"|"cancel","duration_ms":..,"level":..,"slot":..}`
+and `{"cmd":"vru_submit","epoch":E,"slot":S,"duration_ms":..,"auto_talk":..}`;
+core -> host the `vru_dictionary` reply object, sent whenever it changes
+(epoch, listening, mode, pending, capture_id, words with slot / enabled /
+sounds). A seat bound to the VRU reads no pad: the host sends it
+`connected = 0`, and the core answers its Joybus port as the VRU alone, as
+the console does.
 
 ## Savestates
 

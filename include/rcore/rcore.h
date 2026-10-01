@@ -48,7 +48,7 @@ extern "C" {
 
 #define RCORE_ABI_MAJOR 0u /* 0 = draft; the first implemented contract is 1 */
 #define RCORE_ABI_MINOR 0u
-#define RCORE_DRAFT_REVISION 6u /* draft-only counter; see docs/CORE_ABI.md */
+#define RCORE_DRAFT_REVISION 7u /* draft-only counter; see docs/CORE_ABI.md */
 
 #if defined(_WIN32)
 #  define RCORE_EXPORT __declspec(dllexport)
@@ -90,6 +90,7 @@ typedef int32_t rcore_result;
 #define RCORE_CAP_ACCESSORY_HOTPLUG (1ull << 8) /* accessory_changed() while running */
 #define RCORE_CAP_GL_COMPUTE       (1ull << 9) /* wants a lent GL 4.3+ context (gl_get_proc_address);
                                                   must still run, in software, when none is lent */
+#define RCORE_CAP_ACCESSORY_DATA   (1ull << 10) /* accessory_poll / accessory_notify (rev 7) */
 
 typedef struct rcore_core_info {
     uint32_t struct_size;
@@ -379,6 +380,34 @@ typedef struct rcore_host_api {
      * calls it leaves the host to pace by audio, then by a 60 Hz guess.
      * num == 0 or den == 0 withdraws a stated rate. */
     void (*set_frame_rate)(void* host_ctx, uint32_t num, uint32_t den);
+
+    /* --- appended in draft revision 7: accessory data (CAP_ACCESSORY_DATA) --- */
+
+    /* Bytes between the host and an accessory the host plugged (an
+     * rcore_accessory_binding) whose input is not a pad: a microphone's
+     * recognition events, a scanner's barcode. The byte format is the
+     * accessory TYPE's own contract, named in its docs; one call moves one
+     * whole message.
+     *
+     * host -> core: the core drains accessory_poll() at its frame boundary,
+     * before it runs the frame -- one call per message, until a call returns
+     * 0 -- and the bytes are STABLE FOR THE FRAME: the frame's sequence is
+     * what the host held when the frame began, a drain repeated within the
+     * frame (a resimulation) yields the same sequence again, and what arrives
+     * mid-frame waits for the next. That is what lets a netplay or replay host
+     * hand every peer the same bytes for the same frame, as it does input.
+     * Returns the bytes copied, 0 when the sequence is exhausted (and the
+     * drain rewinds), or the size needed when `cap` is too small (nothing
+     * copied, nothing advanced). A core that drains at any other point than
+     * its frame boundary breaks DETERMINISTIC. */
+    size_t (*accessory_poll)(void* host_ctx, uint32_t seat, uint32_t slot,
+                             void* buf, size_t cap);
+    /* core -> host: the device's state for the host's own use (a VRU's
+     * active dictionary and whether the guest is listening), never anything
+     * the guest sees. Copied before returning; may be called at any point of
+     * a frame. */
+    void (*accessory_notify)(void* host_ctx, uint32_t seat, uint32_t slot,
+                             const void* data, size_t len);
 } rcore_host_api;
 
 /* ------------------------------------------------------------------------ */
