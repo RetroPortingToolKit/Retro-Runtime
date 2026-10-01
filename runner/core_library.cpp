@@ -55,6 +55,13 @@ std::string capability_names(std::uint64_t caps, std::uint64_t* unnamed) {
     return out;
 }
 
+bool capability_name_known(const std::string& name) {
+    for (const CapName& c : kCaps) {
+        if (name == c.name) return true;
+    }
+    return false;
+}
+
 bool load_core(const fs::path& path, LoadedCore& out, std::string* error) {
     auto fail = [&](const std::string& m) {
         if (error) *error = path.string() + ": " + m;

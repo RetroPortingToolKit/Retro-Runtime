@@ -524,7 +524,15 @@ int main(int argc, char** argv) {
     // ---- the sidecar must agree with the library, field for field --------
     CoreManifest manifest;
     if (!read_manifest(manifest_path_for(core.path), manifest, &err)) die(err);
-    const auto diffs = verify_manifest(manifest, core);
+    std::vector<std::string> manifest_warnings;
+    const auto diffs = verify_manifest(manifest, core, &manifest_warnings);
+    // A capability from a newer revision is not a disagreement (CORE_ABI.md,
+    // "Capabilities are declared, never faked"): said, on stderr so
+    // --describe's stdout stays its records, and the core runs without it.
+    for (const auto& w : manifest_warnings) {
+        std::fprintf(stderr, "retro-core-runner: WARN: %s: %s\n",
+                     manifest.path.filename().string().c_str(), w.c_str());
+    }
     if (!diffs.empty()) {
         std::fprintf(stderr, "retro-core-runner: %s disagrees with the library it describes:\n",
                      manifest.path.string().c_str());

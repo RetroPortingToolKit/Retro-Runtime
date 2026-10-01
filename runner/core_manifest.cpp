@@ -178,7 +178,8 @@ bool read_manifest(const fs::path& path, CoreManifest& out, std::string* error) 
     return true;
 }
 
-std::vector<std::string> verify_manifest(const CoreManifest& m, const LoadedCore& core) {
+std::vector<std::string> verify_manifest(const CoreManifest& m, const LoadedCore& core,
+                                         std::vector<std::string>* warnings) {
     std::vector<std::string> diffs;
     const rcore_core_info& info = *core.info;
     auto differ = [&](const char* field, const std::string& manifest, const std::string& lib) {
@@ -203,18 +204,30 @@ std::vector<std::string> verify_manifest(const CoreManifest& m, const LoadedCore
     }
     differ("platforms", join(m.platforms), join(plats));
 
+    // Capabilities: compared by the names this runner knows. A bit or a name
+    // from a newer revision is what the core CAN do, not what it requires, so
+    // it is warned about and ignored (RCORE_DRAFT_REVISION is this runner's);
+    // a known capability on one side only is still a disagreement.
     std::uint64_t unnamed = 0;
     const std::string caps = capability_names(info.capabilities, &unnamed);
-    if (unnamed) {
-        diffs.push_back("capabilities: the library declares bits 0x" +
-                        [&] {
-                            std::ostringstream o;
-                            o << std::hex << unnamed;
-                            return o.str();
-                        }() +
-                        " this runner cannot name");
+    if (unnamed && warnings) {
+        std::ostringstream o;
+        o << "capabilities: the library declares bits 0x" << std::hex << unnamed
+          << " this runner cannot name (newer than this runner's rev " << std::dec
+          << RCORE_DRAFT_REVISION << "); ignored";
+        warnings->push_back(o.str());
     }
-    differ("capabilities", join(m.capabilities), caps);
+    std::vector<std::string> known_names;
+    for (const std::string& name : m.capabilities) {
+        if (capability_name_known(name)) {
+            known_names.push_back(name);
+        } else if (warnings) {
+            warnings->push_back("capabilities: the manifest names '" + name +
+                                "', which this runner does not know (newer than this runner's rev " +
+                                std::to_string(RCORE_DRAFT_REVISION) + "); ignored");
+        }
+    }
+    differ("capabilities", join(known_names), caps);
     // A generic core gets its title from --package, never from its sidecar
     // (docs/CORE_ABI.md, "Per-title versus generic cores").
     if ((info.capabilities & RCORE_CAP_GAME_PACKAGE) && m.has_title) {

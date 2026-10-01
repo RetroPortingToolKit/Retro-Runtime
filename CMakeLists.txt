@@ -165,6 +165,16 @@ if(RETRO_RUNTIME_TOOLS)
     file(GENERATE OUTPUT $<TARGET_FILE_DIR:rcore_fake_pkg_core>/fake_pkg_core.rcore.toml CONTENT
 "# Written by CMake for the rcore_fake_pkg_core test fixture.\n\n[core]\nabi_major       = 0\ndraft_revision  = 5\nid              = \"fake_pkg\"\nversion         = \"1.0\"\nlibrary         = \"$<TARGET_FILE_NAME:rcore_fake_pkg_core>\"\nplatforms       = [\"test\"]\ncapabilities    = [\"run_frame\", \"savestate\", \"game_package\"]\n\n[build]\nengine_commit   = \"\"\nengine_dirty    = false\ntoolchain       = \"\"\ngenerated_utc   = \"\"\n")
 
+    # The plain core plus a capability bit from a newer revision (bit 40),
+    # named "future_feature" in its sidecar: a runner warns and runs it.
+    add_library(rcore_fake_future_core SHARED tests/rcore_fake_core.c)
+    target_link_libraries(rcore_fake_future_core PRIVATE retro_rcore)
+    target_compile_definitions(rcore_fake_future_core PRIVATE FAKE_FUTURE_CAP=1)
+    set_target_properties(rcore_fake_future_core PROPERTIES PREFIX "" OUTPUT_NAME fake_future_core
+                          C_VISIBILITY_PRESET hidden)
+    file(GENERATE OUTPUT $<TARGET_FILE_DIR:rcore_fake_future_core>/fake_future_core.rcore.toml CONTENT
+"# Written by CMake for the rcore_fake_future_core test fixture.\n\n[core]\nabi_major       = 0\ndraft_revision  = 99\nid              = \"fake_future\"\nversion         = \"1.0\"\nlibrary         = \"$<TARGET_FILE_NAME:rcore_fake_future_core>\"\nplatforms       = [\"test\"]\ncapabilities    = [\"run_frame\", \"savestate\", \"accessory_data\", \"future_feature\"]\n\n[build]\nengine_commit   = \"\"\nengine_dirty    = false\ntoolchain       = \"\"\ngenerated_utc   = \"\"\n")
+
     enable_testing()
     # Headless: the runner loads the fake core, checks its sidecar, runs 10
     # frames and reports the stated rate.
@@ -254,6 +264,21 @@ if(RETRO_RUNTIME_TOOLS)
                     -DROM=${CMAKE_CURRENT_SOURCE_DIR}/LICENSE
                     -DOUT=${CMAKE_CURRENT_BINARY_DIR}/test-accessory-${_case}
                     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/accessory_test.cmake)
+    endforeach()
+    # A capability this runner does not know is warned about and ignored
+    # (CORE_ABI.md): fake_future_core loads, runs, links and describes; a
+    # KNOWN capability on one side only is still refused.
+    foreach(_case future_headless future_describe future_link missing_known extra_known)
+        add_test(NAME runner_manifest_${_case}
+            COMMAND ${CMAKE_COMMAND}
+                    "-DEMULATOR=${CMAKE_CROSSCOMPILING_EMULATOR}"
+                    -DCASE=${_case}
+                    -DLINK_TEST=$<TARGET_FILE:retro-core-link-test>
+                    -DRUNNER=$<TARGET_FILE:retro-core-runner>
+                    -DFUTURE_CORE=$<TARGET_FILE:rcore_fake_future_core>
+                    -DROM=${CMAKE_CURRENT_SOURCE_DIR}/LICENSE
+                    -DOUT=${CMAKE_CURRENT_BINARY_DIR}/test-manifest-${_case}
+                    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/manifest_test.cmake)
     endforeach()
     foreach(_case plain package package_none unwanted no_core)
         add_test(NAME runner_describe_${_case}

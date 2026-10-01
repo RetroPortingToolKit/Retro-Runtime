@@ -34,6 +34,12 @@ major 1.
   scalars — the same discipline `n64lle/module_abi.h` applies to generated code.
 - **Capabilities are declared, never faked.** A core that does not declare
   `RCORE_CAP_ROLLBACK` is refused for netplay; the host does not attempt it.
+  And a capability is what the core CAN do, not what it requires: a host that
+  does not know a bit -- one from a newer draft revision, in the library or
+  named in the sidecar -- never offers that feature, and says so, but does
+  not refuse the core (ruling 2026-10-01, after a rev-6 runner refused a
+  core declaring rev 7's `accessory_data`). A KNOWN capability that the
+  library and the sidecar disagree on is still a refusal.
 
 ## Decisions inside the draft, and why
 

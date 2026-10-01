@@ -47,7 +47,12 @@ fs::path manifest_path_for(const fs::path& library);
 bool read_manifest(const fs::path& path, CoreManifest& out, std::string* error);
 
 // Every disagreement between the manifest and the loaded core, one line each,
-// naming both values. Empty = they agree.
-std::vector<std::string> verify_manifest(const CoreManifest& m, const LoadedCore& core);
+// naming both values. Empty = they agree. A capability this runner does not
+// know -- a bit in the library, or a name in the sidecar, from a newer draft
+// revision -- is not a disagreement: it is left out of the comparison and
+// reported in *warnings, naming it, so the known capabilities are still
+// checked both ways (a known one missing from either side still refuses).
+std::vector<std::string> verify_manifest(const CoreManifest& m, const LoadedCore& core,
+                                         std::vector<std::string>* warnings = nullptr);
 
 } // namespace retro::runner

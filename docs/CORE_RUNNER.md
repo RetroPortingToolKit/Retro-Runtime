@@ -21,7 +21,15 @@ This page covers what exists and how it is checked.
    A `game_package` core whose sidecar carries `[title]` is refused too
    (`CORE_ABI.md`, "Per-title versus generic cores").
    The draft revision is reported, not enforced: the append-only rule and
-   `struct_size` handle an older core.
+   `struct_size` handle an older core. The same rule for a NEWER core
+   (2026-10-01): a capability bit the library declares that this runner
+   cannot name, or a name in the sidecar it does not know, is logged on
+   stderr as `WARN: ... (newer than this runner's rev N); ignored` and left
+   out of the comparison -- the core runs without that feature offered. The
+   capabilities this runner does know are still compared both ways, so a
+   known one missing from either side refuses as before. The `core:` line
+   prints the library's capability word in full as hex, unknown bits
+   included; no --version or --describe record names bits.
 
    **The game package** (`--package <library>`, 2026-09-26). A core
    declaring `game_package` is generic: its title's generated code is a
@@ -203,7 +211,12 @@ addresses were truncated in `events.tsv`.
 
 Also checked: a manifest with a capability removed, a changed id, an unknown
 key, and no manifest at all are each refused with exit 2, naming the field or
-line.
+line. Under ctest since 2026-10-01 (`runner_manifest_*`,
+`tests/manifest_test.cmake`): `fake_future_core`, the plain core declaring
+bit 40 with a sidecar naming it `future_feature`, runs headless, over the
+link and under `--describe` with the two warnings on stderr; and a sidecar
+naming a known capability the library lacks (`deterministic`), or lacking
+one it has (`savestate`), is refused.
 
 `--package` (2026-09-26) is checked by ctest only, on `fake_pkg_core` (the
 fake core built with `game_package`, sidecar without `[title]`) and

@@ -40,6 +40,11 @@
  * readable file whose first line is FAKE_PACKAGE_MAGIC (tests/fake_package.txt),
  * logging "FAKE_PACKAGE ok <path>". Anything else is RCORE_ERR_CONTENT.
  *
+ * Built with FAKE_FUTURE_CAP it is fake_future_core: the plain core plus a
+ * capability bit this runner has no name for (bit 40), as a core built
+ * against a newer draft revision declares. Its sidecar names it
+ * "future_feature". The runner must warn and run it, not refuse it.
+ *
  * Test fixture only; it exports rcore_entry and nothing else. Its sidecar
  * manifest is written beside it by CMake.
  */
@@ -71,6 +76,10 @@ static rcore_save_region k_regions[1];
 #  define FAKE_ID "fake_pkg"
 #  define FAKE_CAPS (RCORE_CAP_RUN_FRAME | RCORE_CAP_SAVESTATE | RCORE_CAP_GAME_PACKAGE)
 #  define FAKE_PACKAGE_MAGIC "rcore fake game package"
+#elif defined(FAKE_FUTURE_CAP)
+#  define FAKE_ID "fake_future"
+#  define FAKE_CAPS (RCORE_CAP_RUN_FRAME | RCORE_CAP_SAVESTATE | RCORE_CAP_ACCESSORY_DATA | (1ull << 40))
+#  define FAKE_ACCESSORY_DATA 1
 #else
 #  define FAKE_ID "fake"
 #  define FAKE_CAPS (RCORE_CAP_RUN_FRAME | RCORE_CAP_SAVESTATE | RCORE_CAP_ACCESSORY_DATA)

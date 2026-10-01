@@ -38,7 +38,13 @@ bool has_field(const T* s, std::size_t member_offset, std::size_t member_size) {
 #define RCORE_HAS(ptr, type, member) \
     ::retro::runner::has_field((ptr), offsetof(type, member), sizeof(((type*)0)->member))
 
-// The capability bits by their manifest names, in bit order.
+// The capability bits by their manifest names, in bit order. A bit this
+// runner has no name for -- a capability from a newer draft revision -- is
+// returned in *unnamed, never a refusal: a capability says what the core CAN
+// do, and a host that does not know one simply never offers it
+// (docs/CORE_ABI.md, "Capabilities are declared, never faked").
 std::string capability_names(std::uint64_t caps, std::uint64_t* unnamed = nullptr);
+// Whether this runner knows a sidecar's capability name.
+bool capability_name_known(const std::string& name);
 
 } // namespace retro::runner
