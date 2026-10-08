@@ -32,6 +32,10 @@ struct RunnerVersion {
     // 1 when the runner was built with recomp-net (--net-*; CORE_RUNNER.md,
     // "Netplay"); 0 for one without, or from before netplay.
     std::uint32_t netplay = 0;
+    // The netplay module ABI (recomp-net module.h) the runner loads at run
+    // time, with `netplay` 1; 0 when netplay is linked in, absent, or the
+    // runner predates the line. A host installs the module with this ABI.
+    std::uint32_t netplay_module_abi = 0;
     // 1 when the runner answers --describe (a core's declared options and
     // inputs, no ROM; docs/CORE_RUNNER.md); 0 for a runner from before it.
     std::uint32_t describe = 0;

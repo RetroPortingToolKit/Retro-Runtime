@@ -273,6 +273,9 @@ checkout>`; `--version` then says `netplay 1`, otherwise `netplay 0` and every
   wire version joins the build fingerprint, and `runner_netplay: MODULE ...`
   logs which module played. Measured: Pokemon Stadium, two processes on
   loopback, 300 frames, identical `state_hash` at tick 280, 0 desyncs.
+  `--version` prints `netplay_module_abi N` (0 when netplay is linked in or
+  absent): the recomp-net module ABI this runner loads, so a host installs a
+  module with that ABI.
 - **Transport.** Seat 0 hosts: with more than two seats it is recomp-net's
   LAN hub (the host relays every guest's datagrams to the others), with two
   a direct pair. Every other seat dials the host (`--net-peer`). With

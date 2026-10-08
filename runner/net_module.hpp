@@ -22,5 +22,9 @@ struct NetModuleInfo {
 // failed. No fallback: a runner with no usable module refuses --net-*.
 bool net_module_load(const std::string& path, std::string* error);
 const NetModuleInfo* net_module_info(); // null until loaded
+// The module ABI this runner was built for (recomp-net RNET_MODULE_ABI_VERSION),
+// or 0 when netplay is linked in or absent. Reported by --version so a host
+// can pick a module whose ABI matches without opening it.
+std::uint32_t net_module_abi_required();
 
 } // namespace retro::runner

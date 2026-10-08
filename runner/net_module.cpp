@@ -25,6 +25,7 @@ bool g_loaded = false;
 } // namespace
 
 const NetModuleInfo* net_module_info() { return g_loaded ? &g_info : nullptr; }
+std::uint32_t net_module_abi_required() { return RNET_MODULE_ABI_VERSION; }
 
 bool net_module_load(const std::string& path, std::string* error) {
     std::lock_guard<std::mutex> lock(g_mu);
@@ -83,6 +84,7 @@ bool net_module_load(const std::string&, std::string* error) {
     return false;
 }
 const NetModuleInfo* net_module_info() { return nullptr; }
+std::uint32_t net_module_abi_required() { return 0; }
 } // namespace retro::runner
 
 #endif

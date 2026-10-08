@@ -57,6 +57,7 @@
 #include "core_library.hpp"
 #include "core_manifest.hpp"
 #include "host_session.hpp"
+#include "net_module.hpp"
 #include "net_session.hpp"
 #include "link_protocol.hpp"
 #include "runner_link.hpp"
@@ -299,11 +300,12 @@ void print_version() {
                 "describe 1\n"
                 "transfer_pak_seats %zu\n"
                 "netplay %d\n"
+                "netplay_module_abi %u\n"
                 "accessory_data 1\n",
                 RETRO_RUNTIME_VERSION, RETRO_RUNTIME_VERSION, RETRO_RUNTIME_COMMIT,
                 retro::corelink::kProtocolMajor, retro::corelink::kProtocolMinor,
                 RCORE_ABI_MAJOR, RCORE_DRAFT_REVISION, gl, retro::runner::kTransferPakSeats,
-                NetSession::compiled_in() ? 1 : 0);
+                NetSession::compiled_in() ? 1 : 0, retro::runner::net_module_abi_required());
 }
 
 // One --describe field: \ TAB LF CR escaped, so a record is one line; a NULL
