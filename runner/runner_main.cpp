@@ -57,6 +57,7 @@
 #include "core_library.hpp"
 #include "core_manifest.hpp"
 #include "host_session.hpp"
+#include "net_module.hpp"
 #include "net_session.hpp"
 #include "link_protocol.hpp"
 #include "runner_link.hpp"
@@ -299,11 +300,12 @@ void print_version() {
                 "describe 1\n"
                 "transfer_pak_seats %zu\n"
                 "netplay %d\n"
+                "netplay_module_abi %u\n"
                 "accessory_data 1\n",
                 RETRO_RUNTIME_VERSION, RETRO_RUNTIME_VERSION, RETRO_RUNTIME_COMMIT,
                 retro::corelink::kProtocolMajor, retro::corelink::kProtocolMinor,
                 RCORE_ABI_MAJOR, RCORE_DRAFT_REVISION, gl, retro::runner::kTransferPakSeats,
-                NetSession::compiled_in() ? 1 : 0);
+                NetSession::compiled_in() ? 1 : 0, retro::runner::net_module_abi_required());
 }
 
 // One --describe field: \ TAB LF CR escaped, so a record is one line; a NULL
@@ -461,6 +463,7 @@ int main(int argc, char** argv) {
         else if (a == "--list-options") list_options = true;
         else if (a == "--describe") describe = true;
         else if (a == "--replay-at") replay_at = num(val());
+        else if (a == "--net-module") { netplay = true; net.module_path = val(); }
         else if (a == "--net-slot") { netplay = true; net.slot = static_cast<int>(num(val())); }
         else if (a == "--net-slots") { netplay = true; net.slots = static_cast<int>(num(val())); }
         else if (a == "--net-occupied") { netplay = true; net.occupied = static_cast<std::uint32_t>(num(val())); }
@@ -496,6 +499,8 @@ int main(int argc, char** argv) {
         }
     }
     if (core_path.empty()) die("--core <library> is required");
+    if (net.module_path.empty())
+        if (const char* e = std::getenv("RETRO_NETPLAY_MODULE")) net.module_path = e;
     if (netplay && (replay_at || load_state))
         die("netplay starts from a cold boot: --replay-at and --load-state are refused");
     if (netplay && !NetSession::compiled_in())

@@ -26,6 +26,7 @@
 namespace retro::runner {
 
 struct NetParams {
+    std::string module_path;   // the netplay module (module builds only)
     int slot = 0;              // this peer's seat
     int slots = 2;             // seats in the match
     std::uint32_t occupied = 0; // bit i = seat i has a player; 0 = all
