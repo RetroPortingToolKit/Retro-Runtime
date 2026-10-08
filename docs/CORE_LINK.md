@@ -63,6 +63,15 @@ region's layout: a major, so a 1.x peer is refused at hello.
 (hub to runner) and `AccessoryNotify = 9` (runner to hub), described under
 "Accessory data" below. Two new message types, nothing grown.
 
+**2.2** (2026-10-08) grows `FrameDone`, the first message to grow. It appends
+`game_frame` (rcore rev 8: pictures the game finished, as of the core's last
+picture; 0 = the core does not say) and `work_ns` (how long `run_frame` took on the core thread, resims included, a
+netplay stall not). They are what the overlay's FPS / VI / ms-per-VI readout
+is made of (`OVERLAY.md`), and nothing else reads them: not pacing, not
+netplay. A 2.2 runner sends `FrameDone` at its 2.1 size (24 bytes) to a 2.1
+hub; a 2.2 hub reads a 2.1 runner's with both fields 0. The host side
+sums them in `CoreLink::frame_stats()`.
+
 ## A session
 
 ```

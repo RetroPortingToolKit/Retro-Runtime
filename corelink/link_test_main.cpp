@@ -313,6 +313,10 @@ int main(int argc, char** argv) {
     if (const FrameInfo* f = link.frame_info(); f && f->width && link.frame_pixels()) {
         std::printf("picture: first byte %u\n", unsigned(link.frame_pixels()[0]));
     }
+    // 2.2: what the overlay's readout is made of.
+    std::printf("frame stats: game %llu work %s\n",
+                static_cast<unsigned long long>(link.frame_stats().game_frame),
+                link.frame_stats().work_ns ? "measured" : "none");
     std::printf("link-test: %llu frame(s) granted and done, runner exit %d, %u fault(s)\n",
                 static_cast<unsigned long long>(link.frames_done()), link.exit_code(), faults);
     return (ok && !faults) ? 0 : 1;

@@ -173,9 +173,12 @@ void CoreLink::handle_packet(const std::vector<unsigned char>& buf,
             break;
         case Msg::FrameDone: {
             FrameDoneMsg m{};
-            if (!as_msg(buf, m)) break;
+            if (!as_msg(buf, m, kFrameDoneSize21)) break; // 2.1 runner: stats read 0
             if (outstanding_ > 0) --outstanding_;
             done_ = m.frame_number;
+            if (m.game_frame) stats_.game_frame = m.game_frame; // a frame with no picture
+                                                                // keeps the last count
+            stats_.work_ns += m.work_ns;
             break;
         }
         case Msg::Log: {

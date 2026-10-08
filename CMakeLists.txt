@@ -210,6 +210,14 @@ if(RETRO_RUNTIME_TOOLS)
                 --out ${CMAKE_CURRENT_BINARY_DIR}/test-link)
     set_tests_properties(link_fake_core PROPERTIES
         PASS_REGULAR_EXPRESSION "10 frame\\(s\\) granted and done, runner exit 0")
+    # Link 2.2: FrameDone carries the game's count and the runner's timing.
+    add_test(NAME link_frame_stats
+        COMMAND retro-core-link-test --runner $<TARGET_FILE:retro-core-runner>
+                --core $<TARGET_FILE:rcore_fake_core>
+                --rom ${CMAKE_CURRENT_SOURCE_DIR}/LICENSE --frames 10
+                --out ${CMAKE_CURRENT_BINARY_DIR}/test-link-stats)
+    set_tests_properties(link_frame_stats PROPERTIES
+        PASS_REGULAR_EXPRESSION "frame stats: game 5 work measured")
     # probe_runner: what a host reads to choose and verify a runner.
     add_test(NAME runner_probe COMMAND retro-core-link-test --probe $<TARGET_FILE:retro-core-runner>)
     set_tests_properties(runner_probe PROPERTIES PASS_REGULAR_EXPRESSION

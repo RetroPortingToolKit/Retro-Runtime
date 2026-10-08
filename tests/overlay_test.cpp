@@ -47,38 +47,99 @@ void test_osd() {
     std::uint64_t t = 1000 * kMs;
     CHECK(osd.layers(t).empty());
 
-    // FPS: 60 Hz frames read 60, whether or not the readout is showing.
+    // A host with no counters (note_frame): 60 Hz frames read 60 VI, and the
+    // readings it cannot know read "--".
     osd.set_fps_visible(true);
     for (int i = 0; i < 100; ++i) osd.note_frame(t += 16666667ull);
-    CHECK(osd.fps() > 59.9 && osd.fps() < 60.1);
+    FrameRates r = osd.rates();
+    CHECK(r.vi > 59.9 && r.vi < 60.1);
+    CHECK(!r.has_fps && !r.has_ms);
     const Layer* st = find(osd.layers(t), kLayerStatus);
-    CHECK(st && st->anchor == Anchor::TopLeft && st->image->width > 0);
-    // "60 FPS": six glyphs at 2x plus padding.
-    CHECK(st && st->image->width == 2 * 4 + 6 * 16);
+    CHECK(st && st->anchor == Anchor::TopLeft);
+    CHECK(osd.readout() == "FPS      --\nVI     60.0\nms/VI    --");
+    // Three rows of 11 glyphs at 2x, plus padding and row gaps.
+    CHECK(st && st->image->width == 2 * 4 + 11 * 16);
+    CHECK(st && st->image->height == 2 * 4 + 3 * 16 + 2 * 2);
+    // Labels are dimmer than their values: no white in the first row's label
+    // ("FPS", left of column 6), and white in its value.
+    if (st) {
+        auto red_in = [&](int x0, int x1, unsigned red) {
+            for (int y = 4; y < 4 + 16; ++y)
+                for (int x = x0; x < x1; ++x) {
+                    const std::size_t i = (std::size_t(y) * st->image->width + x) * 4;
+                    if (st->image->rgba[i + 3] == 0xFF && st->image->rgba[i] == red) return true;
+                }
+            return false;
+        };
+        CHECK(!red_in(4, 4 + 6 * 16, 0xFF) && red_in(4, 4 + 6 * 16, 0xB2));
+        CHECK(red_in(4 + 6 * 16, 4 + 11 * 16, 0xFF));
+    }
     const std::uint64_t rev = st ? st->revision : 0;
     osd.note_frame(t += 16666667ull);
     st = find(osd.layers(t), kLayerStatus);
     CHECK(st && st->revision == rev); // same text, no redraw
 
     // Uneven arrival -- 15 ms, 25 ms, ... -- is still about 50 frames a second
-    // (63 intervals in the window, so 49.8 or 50.2); a mean of 1/dt says 53.3.
+    // over the window; a mean of 1/dt says 53.3.
     for (int i = 0; i < 64; ++i) osd.note_frame(t += (i & 1) ? 25 * kMs : 15 * kMs);
-    CHECK(osd.fps() > 49.5 && osd.fps() < 50.5);
+    r = osd.rates();
+    CHECK(r.vi > 49.5 && r.vi < 50.5);
+
+    // A core that counts: an N64 game drawing every other field of a 59.94 Hz
+    // VI, each field taking 4.2 ms to emulate. Sampled once per hub frame,
+    // whatever that is (here 120 Hz, so half the samples see nothing new).
+    {
+        Osd n64;
+        n64.set_fps_visible(true);
+        FrameCounters c;
+        std::uint64_t tt = 1000 * kMs, next_field = tt;
+        for (int i = 0; i < 240; ++i) {
+            tt += 8333333ull;
+            while (next_field <= tt) {
+                ++c.frames;
+                if (c.frames % 2 == 0) ++c.game;
+                c.work_ns += 4200000ull;
+                next_field += 16683350ull;
+            }
+            n64.note_counters(tt, c);
+            n64.layers(tt);
+        }
+        const FrameRates nr = n64.rates();
+        CHECK(nr.has_fps && nr.has_ms);
+        CHECK(nr.vi > 59.0 && nr.vi < 61.0);
+        CHECK(nr.fps > 29.9 && nr.fps < 30.05); // 29.97: no window-edge error
+        CHECK(nr.ms_per_vi > 4.19 && nr.ms_per_vi < 4.21);
+        CHECK(n64.readout().find("ms/VI  4.20") != std::string::npos);
+        // A reset (the totals go backwards) is a fresh window, not a negative rate.
+        n64.note_counters(tt += 16 * kMs, {1, 0, 4000000});
+        CHECK(n64.rates().vi == 0.0);
+        n64.note_counters(tt += 20 * kMs, {2, 1, 8000000});
+        CHECK(n64.rates().vi > 49.9 && n64.rates().vi < 50.1);
+    }
+
     // Under turbo frames come faster than presents: the readout follows them,
     // from the moment turbo starts.
     osd.set_turbo(true);
     for (int i = 0; i < 10; ++i) osd.note_frame(t += 4166667ull);
-    CHECK(osd.fps() > 239.0 && osd.fps() < 241.0);
+    r = osd.rates();
+    CHECK(r.vi > 239.0 && r.vi < 241.0);
     osd.set_turbo(false);
-    CHECK(osd.fps() == 0.0);
+    CHECK(osd.rates().vi == 0.0);
     osd.note_frame(t += 20 * kMs);
     osd.note_frame(t += 20 * kMs);
-    CHECK(osd.fps() > 49.9 && osd.fps() < 50.1);
-    // A pause is a break, not a slow frame.
+    CHECK(osd.rates().vi > 49.9 && osd.rates().vi < 50.1);
+    // A pause is a break, not a slow frame; the last reading stands until the
+    // fresh window has one of its own.
+    osd.layers(t);
+    const std::string before = osd.readout();
     osd.note_frame(t += 2000 * kMs);
-    CHECK(osd.fps() == 0.0);
+    CHECK(osd.rates().vi == 0.0);
+    osd.layers(t);
+    CHECK(osd.readout() == before);
     osd.note_frame(t += 20 * kMs);
-    CHECK(osd.fps() > 49.9 && osd.fps() < 50.1);
+    CHECK(osd.rates().vi > 49.9 && osd.rates().vi < 50.1);
+    osd.layers(t);
+    CHECK(osd.readout().find("VI     50.0") != std::string::npos);
 
     // TURBO sits alone in the top right.
     osd.set_turbo(true);
@@ -380,14 +441,29 @@ void dump(const fs::path& out) {
         f << "P6\n" << w << ' ' << h << "\n255\n";
         f.write(reinterpret_cast<const char*>(rgb.data()), std::streamsize(rgb.size()));
     };
+    // Counters shaped like an N64 game drawing every other field of a 59.94 Hz
+    // VI, 5.1 ms of emulation a field (illustrative numbers, not a measurement).
     Osd osd;
     std::uint64_t t = 1000 * kMs;
     osd.set_fps_visible(true);
-    for (int i = 0; i < 70; ++i) osd.note_frame(t += 16683350ull);
-    osd.set_turbo(true);
+    osd.set_turbo(true); // first: turbo starting restarts the reading
+    FrameCounters c;
+    for (int i = 0; i < 70; ++i) {
+        ++c.frames;
+        c.game += i & 1;
+        c.work_ns += 5100000ull;
+        osd.note_counters(t += 16683350ull, c);
+    }
     osd.show_volume(70, t);
     osd.toast("Slot 3 saved", t);
     write("osd", osd.layers(t), 1280, 720);
+
+    // A host with no counters (or a 2.1 runner): VI alone.
+    Osd plain;
+    plain.set_fps_visible(true);
+    t = 1000 * kMs;
+    for (int i = 0; i < 70; ++i) plain.note_frame(t += 16683350ull);
+    write("osd_no_counters", plain.layers(t), 1280, 720);
 
     SavestateMenu m;
     const fs::path dir = out / "slots";

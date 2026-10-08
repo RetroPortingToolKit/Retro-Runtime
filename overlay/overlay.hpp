@@ -1,7 +1,7 @@
 #pragma once
 
-// retro_overlay -- what a host draws over a running core: the FPS readout
-// (top left), the TURBO marker (top right), the volume meter (right edge),
+// retro_overlay -- what a host draws over a running core: the frame-rate
+// readout (top left), the TURBO marker (top right), the volume meter (right edge),
 // toasts, and the save-state browser (centre). docs/OVERLAY.md is the design.
 //
 // It lives here, in the runtime, and not in a core or a host, so that it looks
@@ -77,26 +77,53 @@ struct Rect {
 //     of the window (or shrinks to fit a window smaller than it).
 Rect place(const Layer& layer, float win_w, float win_h);
 
-// ---- OSD: FPS, TURBO, volume, toasts ------------------------------------------
+// ---- OSD: frame rates, TURBO, volume, toasts -----------------------------------
+
+// The readout's inputs, as running totals since the core loaded
+// (corelink::FrameStats carries the same three over the link).
+struct FrameCounters {
+    std::uint64_t frames = 0;  // frames the machine has run: VI fields on an N64
+    std::uint64_t game = 0;    // pictures the GAME has finished (rcore_frame::game_frame);
+                               // 0 = the core does not tell them apart
+    std::uint64_t work_ns = 0; // time the core took to run those frames; 0 = unmeasured
+};
+
+// Three rates, each over the last second of samples.
+struct FrameRates {
+    double fps = 0;       // the game's pictures per second (valid when has_fps)
+    double vi = 0;        // machine frames per second: what is presented
+    double ms_per_vi = 0; // emulation time per machine frame (valid when has_ms)
+    bool has_fps = false, has_ms = false;
+};
 
 class Osd {
 public:
     Osd();
 
-    // FPS readout, top left. The host's "show FPS" setting and its hotkey
-    // both set this; the OSD only draws what it is told.
+    // The frame-rate readout, top left. The host's "show FPS" setting and its
+    // hotkey both set this; the OSD only draws what it is told. Three rows:
+    //   FPS    the rate the game draws at (an N64 game at 30 reads 30 here)
+    //   VI     the rate the machine runs and presents frames at (60 there)
+    //   ms/VI  how long the core took to emulate one of them: the headroom,
+    //          against the 16.7 ms a 60 Hz frame allows
+    // A reading the core or the link cannot supply shows "--".
     void set_fps_visible(bool on);
     bool fps_visible() const { return fps_visible_; }
 
-    // Once per EMULATED frame -- each frame the core finished -- not per
-    // present. Under turbo the core runs several frames per present, and the
-    // readout should say how fast the machine is running, which is what a
-    // player holding turbo is asking. Frames over the time they span, for the
-    // last 64 -- not a mean of 1/dt, which reads high whenever frames arrive
-    // unevenly. A gap of more than half a second starts it afresh rather than
-    // averaging the gap in.
+    // The totals as they stand, whenever the host has looked (once a host
+    // frame is plenty; calls where nothing moved are ignored). Rates are the
+    // change over the last second of these, counted on EMULATED frames, not
+    // presents: under turbo the core runs several frames per present, and the
+    // reading should say how fast the machine is running. A total that goes
+    // backwards (a reset) or half a second without a frame starts it afresh
+    // rather than averaging the break in.
+    void note_counters(std::uint64_t now_ns, const FrameCounters& c);
+    // One more machine frame and nothing else known: for a host with no
+    // counters. FPS and ms/VI then read "--".
     void note_frame(std::uint64_t now_ns);
-    double fps() const;
+    FrameRates rates() const;
+    // The rows as last drawn (or about to be): "FPS    30.0\nVI     60.0\n...".
+    const std::string& readout() const { return readout_; }
     // Start the reading afresh: a host calls it when play resumes after a
     // pause or a menu. Turbo starting or stopping does it too.
     void restart_fps();
@@ -118,14 +145,24 @@ public:
 
 private:
     void rasterize_status();
+    static std::string format_readout(const FrameRates& r, bool have_window);
     void rasterize_volume();
 
     bool fps_visible_ = false;
     bool turbo_ = false;
 
-    static constexpr int kFpsWindow = 64;
-    std::uint64_t stamps_[kFpsWindow]{}; // when each of the last frames finished
+    struct Sample {
+        std::uint64_t ns;
+        FrameCounters c;
+    };
+    static constexpr int kSamples = 256; // a second of samples, even under turbo
+    Sample samples_[kSamples]{};
     int pos_ = 0, count_ = 0;
+    bool game_counted_ = false;    // the core has said a nonzero game count
+    std::uint64_t own_frames_ = 0; // note_frame's running total
+    std::string readout_;          // the rows last formatted
+    std::uint64_t readout_ns_ = 0; // when; refreshed 4 times a second
+    bool readout_stale_ = true;    // refresh as soon as the window allows
 
     std::string toast_;
     std::uint64_t toast_until_ns_ = 0;
@@ -134,6 +171,7 @@ private:
     std::uint64_t volume_until_ns_ = 0;
 
     std::string status_drawn_;
+    int status_readout_rows_ = 0; // how many of its rows are the readout's
     Image status_, turbo_img_, volume_img_;
     std::uint64_t status_rev_ = 0, volume_rev_ = 0;
     std::vector<Layer> layers_;

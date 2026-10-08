@@ -1,6 +1,6 @@
 # The play overlay — `retro_overlay`
 
-What a host draws over a running core: an FPS readout, a TURBO marker, a volume
+What a host draws over a running core: a frame-rate readout, a TURBO marker, a volume
 meter, toasts, and the save-state browser. Code: `overlay/` (the library),
 `state/` (the savestate envelope it lists), and the runner's savestate path
 (`runner/state_keeper.*`, link 1.1 in `CORE_LINK.md`).
@@ -35,20 +35,47 @@ host passes the time in, feeds it events, and draws the images it hands back.
 
 | Piece | Where | When |
 |---|---|---|
-| FPS | top left | while the host's "show FPS" is on |
-| Toasts | top left, under FPS | about 2 s after something happened ("Slot 3 saved") |
+| FPS / VI / ms/VI | top left | while the host's "show FPS" is on |
+| Toasts | top left, under the readout | about 2 s after something happened ("Slot 3 saved") |
 | `>> TURBO` | top right, gold | while the host runs the core faster than its rate |
 | Volume meter | right edge, centred | 1.5 s after the volume changes |
 | Save states | centre | while the browser is open |
 
-**FPS counts emulated frames**, the frames the core finished, not presents.
-Under turbo the core runs several frames per present, and the reading should
-say how fast the machine is running. The reading is the last 64 frames divided
-by the time they span. It is not a mean of 1/dt: that reads high whenever
-frames arrive unevenly. For example, 15 ms and 25 ms alternating gives a 1/dt
-mean of 53.3 fps, where the true rate is 50. The reading starts afresh on a gap
-over 0.5 s, when turbo starts or stops, and when the host calls `restart_fps()`
-(the hub does on resuming from a pause).
+**The readout is three rows** (2026-10-08; it was one "60 FPS" until then,
+and that number was the VI rate):
+
+```
+FPS    30.0     the rate the GAME draws at: new pictures a second
+VI     60.0     the rate the machine runs and presents frames at
+ms/VI  4.21     emulation time per machine frame: the headroom
+```
+
+- **FPS** counts the game's own pictures, `rcore_frame::game_frame` (rcore
+  rev 8). On an N64 that is the game changing VI_ORIGIN
+  (`n64_vi_swap_count()`), so a game drawing every other field reads 30
+  while VI reads 60. A core that cannot tell them apart leaves it 0 and the row
+  reads `--`.
+- **VI** counts the frames the core finished and presented: one per grant
+  (`CoreLink::frames_done()`), a VI field on an N64. Not the core's own
+  `frame_number`: n64lle's counts rollback replays and any field a request
+  ran past, and neither reached the screen.
+- **ms/VI** is the runner's measured `run_frame` time over those frames (link
+  2.2 `work_ns`). It is the core thread's work, not the wall time between
+  fields (that is 1000 / VI): 16.7 ms is a 60 Hz frame's whole budget. A
+  2.1 runner does not measure it, and the row reads `--`.
+
+Rates are counted on emulated frames, not presents. Under turbo the core runs
+several frames per present, and the reading should say how fast the machine is
+running. The host hands in running totals (`note_counters`, from
+`CoreLink::frame_stats()`), whenever it looks; each rate is the change over the
+last second divided by the time it spans. That is not a mean of 1/dt, which
+reads high whenever frames arrive unevenly: 15 ms and 25 ms alternating gives a
+1/dt mean of 53.3 fps, where the true rate is 50. The reading starts afresh on
+a gap over 0.5 s, when a total goes backwards, when turbo starts or stops, and
+when the host calls `restart_fps()` (the hub does on resuming from a pause);
+the last reading stays up until the fresh window has one of its own. The digits
+refresh four times a second, so they can be read. A host with no counters calls
+`note_frame()` once per emulated frame and gets VI alone.
 
 ## Drawing it (the host's side)
 
@@ -160,7 +187,8 @@ These are the hub's choices, listed here because every core gets them:
 ## How it was checked (2026-09-26)
 
 - **`retro-overlay-test`** (ctest `overlay`) checks:
-  - the FPS method, including uneven arrival and turbo;
+  - the readout's three rates, including uneven arrival, turbo, a reset and
+    a core that does not count (`--`);
   - layer lifetimes and revisions, and `place()`;
   - the browser: chord edges, auto-repeat, requests, refusals, marks;
   - `InputGuard`;

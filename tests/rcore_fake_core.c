@@ -298,6 +298,7 @@ static rcore_result run_frame(void) {
     f.pixel_format = RCORE_PIXEL_RGBA8;
     f.pixels = g_pixels;
     f.frame_number = g_frames;
+    f.game_frame = g_frames / 2; /* rev 8: a game drawing every other frame */
     g_host->video_submit(g_host->host_ctx, &f);
     return RCORE_OK;
 }
