@@ -114,13 +114,27 @@ if(RETRO_RUNTIME_TOOLS)
         runner/host_session.cpp
         runner/state_keeper.cpp
         runner/net_session.cpp
+        runner/net_module.cpp
     )
     # Netplay (runner/net_session.hpp): recomp-net's episode driver and UDP
     # transport, compiled in from a checkout when one is named. Without it the
     # runner answers `netplay 0` and refuses --net-*.
     set(RETRO_RUNTIME_RECOMP_NET_DIR "" CACHE PATH
         "recomp-net checkout: build retro-core-runner with netplay")
-    if(RETRO_RUNTIME_RECOMP_NET_DIR)
+    # With RETRO_RUNTIME_NETPLAY_MODULE the netcode is NOT linked: the runner
+    # opens a librecomp_net_module at run time (--net-module / RETRO_NETPLAY_MODULE,
+    # runner/net_module.hpp), so it updates without a new runner. The checkout
+    # then supplies headers only.
+    option(RETRO_RUNTIME_NETPLAY_MODULE "retro-core-runner: netplay through a loadable module" OFF)
+    if(RETRO_RUNTIME_NETPLAY_MODULE)
+        if(NOT RETRO_RUNTIME_RECOMP_NET_DIR OR NOT EXISTS "${RETRO_RUNTIME_RECOMP_NET_DIR}/include/recomp_net/module.h")
+            message(FATAL_ERROR "RETRO_RUNTIME_NETPLAY_MODULE needs RETRO_RUNTIME_RECOMP_NET_DIR with include/recomp_net/module.h")
+        endif()
+        target_include_directories(retro-core-runner PRIVATE ${RETRO_RUNTIME_RECOMP_NET_DIR}/include)
+        target_compile_definitions(retro-core-runner PRIVATE RETRO_RUNNER_NETPLAY=1 RETRO_RUNNER_NETPLAY_MODULE=1)
+        target_link_libraries(retro-core-runner PRIVATE ${CMAKE_DL_LIBS})
+        message(STATUS "retro-core-runner: netplay via loadable module (headers ${RETRO_RUNTIME_RECOMP_NET_DIR})")
+    elseif(RETRO_RUNTIME_RECOMP_NET_DIR)
         set(RNET_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
         set(RNET_BUILD_TESTS OFF CACHE BOOL "" FORCE)
         set(RNET_ENABLE_ICE OFF CACHE BOOL "" FORCE)

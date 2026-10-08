@@ -10,6 +10,10 @@ extern "C" {
 #include "recomp_net/rb_driver.h"
 #include "recomp_net/session.h"
 }
+#if defined(RETRO_RUNNER_NETPLAY_MODULE)
+#include "net_module.hpp"
+#include "net_module_redirect.hpp"
+#endif
 #endif
 
 namespace retro::runner {
@@ -205,6 +209,18 @@ bool NetSession::start(const LoadedCore& core, const NetParams& p, std::string* 
     };
     Impl& s = *impl_;
     const rcore_core_api* a = core.api;
+#if defined(RETRO_RUNNER_NETPLAY_MODULE)
+    // The netcode is a separate, versioned file: open and check it before any
+    // recomp-net call, and say which one a peer-visible log came from.
+    {
+        std::string why;
+        if (!net_module_load(p.module_path, &why)) return fail(why);
+        const NetModuleInfo* m = net_module_info();
+        std::fprintf(stderr, "runner_netplay: MODULE %s recomp-net %u.%u.%u abi %u.%u wire %u build %s\n",
+                     m->path.c_str(), m->major, m->minor, m->patch, m->abi_version, m->abi_minor,
+                     m->wire_version, m->build_id.c_str());
+    }
+#endif
     if (!(core.info->capabilities & RCORE_CAP_DETERMINISTIC))
         return fail("the core does not declare DETERMINISTIC, so it cannot play netplay");
     if (!(core.info->capabilities & RCORE_CAP_ROLLBACK) || !a->rb_snap_save || !a->rb_snap_load ||
@@ -243,6 +259,11 @@ bool NetSession::start(const LoadedCore& core, const NetParams& p, std::string* 
     // ---- identity: what every peer must hold identically ----
     std::uint32_t build_fp = fnv1a(kRunnerNetVersion);
     build_fp = fnv1a(core.sha256, build_fp);
+#if defined(RETRO_RUNNER_NETPLAY_MODULE)
+    // A module whose wire protocol differs cannot play this match: it joins
+    // the identity every peer must hold identically (refused at the handshake).
+    build_fp = fnv1a("wire " + std::to_string(net_module_info()->wire_version), build_fp);
+#endif
     std::uint32_t content_fp = fnv1a("slots " + std::to_string(p.slots) + " occupied " +
                                      std::to_string(p.occupied) + " epoch " +
                                      std::to_string(p.epoch_s));

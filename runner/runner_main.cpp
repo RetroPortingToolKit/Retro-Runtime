@@ -461,6 +461,7 @@ int main(int argc, char** argv) {
         else if (a == "--list-options") list_options = true;
         else if (a == "--describe") describe = true;
         else if (a == "--replay-at") replay_at = num(val());
+        else if (a == "--net-module") { netplay = true; net.module_path = val(); }
         else if (a == "--net-slot") { netplay = true; net.slot = static_cast<int>(num(val())); }
         else if (a == "--net-slots") { netplay = true; net.slots = static_cast<int>(num(val())); }
         else if (a == "--net-occupied") { netplay = true; net.occupied = static_cast<std::uint32_t>(num(val())); }
@@ -496,6 +497,8 @@ int main(int argc, char** argv) {
         }
     }
     if (core_path.empty()) die("--core <library> is required");
+    if (net.module_path.empty())
+        if (const char* e = std::getenv("RETRO_NETPLAY_MODULE")) net.module_path = e;
     if (netplay && (replay_at || load_state))
         die("netplay starts from a cold boot: --replay-at and --load-state are refused");
     if (netplay && !NetSession::compiled_in())

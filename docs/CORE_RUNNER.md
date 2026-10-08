@@ -265,6 +265,14 @@ checkout>`; `--version` then says `netplay 1`, otherwise `netplay 0` and every
 [--net-content LINE ...]
 ```
 
+- **As a module** (`-DRETRO_RUNTIME_NETPLAY_MODULE=ON` with
+  `RETRO_RUNTIME_RECOMP_NET_DIR`, headers only). recomp-net is not linked: the
+  runner opens `librecomp_net_module` from `--net-module <path>` or
+  `RETRO_NETPLAY_MODULE` (`runner/net_module.*`), refusing it at start, by name,
+  on a missing path, wrong ABI, no rbengine or any missing symbol. The module's
+  wire version joins the build fingerprint, and `runner_netplay: MODULE ...`
+  logs which module played. Measured: Pokemon Stadium, two processes on
+  loopback, 300 frames, identical `state_hash` at tick 280, 0 desyncs.
 - **Transport.** Seat 0 hosts: with more than two seats it is recomp-net's
   LAN hub (the host relays every guest's datagrams to the others), with two
   a direct pair. Every other seat dials the host (`--net-peer`). With
