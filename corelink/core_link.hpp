@@ -102,6 +102,13 @@ enum class LinkState {
     Ended,    // the runner exited (see exit_code / exit_reason)
 };
 
+// What the finished frames add up to (link 2.2), for a host's readout with
+// frames_done() (overlay Osd::note_counters). Both 0 from a 2.1 runner.
+struct FrameStats {
+    std::uint64_t game_frame = 0; // pictures the game finished (rcore rev 8); 0 = untold
+    std::uint64_t work_ns = 0;    // time run_frame took, summed over every frame done
+};
+
 class CoreLink {
 public:
     CoreLink() = default;
@@ -126,6 +133,7 @@ public:
     bool grant(const rcore_pad pads[RCORE_MAX_SEATS]);
     std::uint64_t frames_granted() const { return granted_; }
     std::uint64_t frames_done() const { return done_; }
+    const FrameStats& frame_stats() const { return stats_; }
 
     // Savestates (link 1.1), between frames. The runner writes and checks the
     // envelope at `path` (docs/CORE_ABI.md, "Savestates"). False without
@@ -205,6 +213,7 @@ private:
     RunnerProcess process_;
     std::vector<Region> regions_;
     std::uint64_t granted_ = 0, done_ = 0;
+    FrameStats stats_;
     int outstanding_ = 0;
     std::uint32_t front_ = 0; // the triple buffer's initial front slot
     bool have_frame_ = false;

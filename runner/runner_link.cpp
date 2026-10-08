@@ -5,6 +5,8 @@
 #include "state_keeper.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <cstddef>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -150,6 +152,10 @@ public:
         info.aspect_num = f.aspect_num;
         info.aspect_den = f.aspect_den;
         info.frame_number = frame_number;
+        // 2.2: the game's own count, carried in FrameDone for the overlay.
+        last_game_frame = f.struct_size >= offsetof(rcore_frame, game_frame) + sizeof f.game_frame
+                              ? f.game_frame
+                              : 0;
         // Publish: our back becomes middle, and middle's old slot becomes ours.
         published_ = static_cast<int>(back_);
         back_ = shm_->middle.exchange(back_ | kFresh, std::memory_order_acq_rel) & ~kFresh;
@@ -206,6 +212,8 @@ public:
 
     rcore_pad pads[RCORE_MAX_SEATS]{};
     std::uint64_t frame_number = 0; // the granted frame being run
+    // rcore_frame::game_frame at the core's last video_submit (FrameDoneMsg 2.2).
+    std::uint64_t last_game_frame = 0;
     std::uint32_t faults = 0;
     std::uint32_t bad_frames = 0;
 
@@ -270,6 +278,12 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
     copy_str(hello.core_version, sizeof hello.core_version, core.info->core_version);
     copy_str(hello.platforms, sizeof hello.platforms, core.info->platforms);
     if (!send_msg(sock, hello)) return 2;
+
+    // The minor this session speaks: min(host, runner). A FrameDone goes to a
+    // 2.1 hub at its 2.1 size.
+    const std::uint32_t session_minor = std::min(shm->protocol_minor, kProtocolMinor);
+    const std::size_t frame_done_size =
+        link_has_frame_stats(session_minor) ? sizeof(FrameDoneMsg) : kFrameDoneSize21;
 
     LinkSink sink(sock, shm, a.out);
     HostSession session(core, sink);
@@ -493,8 +507,16 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         FrameDoneMsg done{};
         done.h.type = Msg::FrameDone;
         done.frame_number = g.frame_number;
+        using Clock = std::chrono::steady_clock;
+        auto timed = [&](rcore_result (*fn)()) {
+            const Clock::time_point t0 = Clock::now();
+            const rcore_result rc = fn();
+            done.work_ns += static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - t0).count());
+            return rc;
+        };
         if (!a.netplay) {
-            done.result = core.api->run_frame();
+            done.result = timed(core.api->run_frame);
         } else {
             // One grant = one LIVE frame. Replays the driver asks for run
             // first, silently; a stall waits on the network -- which is what
@@ -524,8 +546,8 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
                 }
                 net_tick = ns.tick();
                 const rcore_result rc = adm == NetSession::Admit::Live
-                                            ? core.api->run_frame()
-                                            : core.api->run_frame_resim();
+                                            ? timed(core.api->run_frame)
+                                            : timed(core.api->run_frame_resim);
                 ns.finish(adm);
                 if (rc != RCORE_OK || adm == NetSession::Admit::Live) {
                     done.result = rc;
@@ -534,7 +556,8 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
             }
             if (quit) break;
         }
-        send_msg(sock, done);
+        done.game_frame = sink.last_game_frame;
+        send_msg_sized(sock, done, frame_done_size);
         if (sink.bad_frames) {
             code = exiting(sock, 1, "the core submitted a frame this link cannot carry "
                                     "(format, or larger than 1024x1024)");

@@ -10,7 +10,7 @@ title's core.
 |---|---|
 | `include/rcore/rcore.h` | The host ↔ core contract. A core is a shared library exporting one symbol, `rcore_entry`. Draft revision 7, `RCORE_ABI_MAJOR 0`. |
 | `corelink/` | The host ↔ runner link: its protocol, and `retro_corelink`, the client a host embeds. |
-| `overlay/` | `retro_overlay`: what a host draws over a running core. It covers FPS, TURBO, the volume meter, toasts and the save-state browser, and looks the same for every core. |
+| `overlay/` | `retro_overlay`: what a host draws over a running core. It covers the FPS / VI / ms-per-VI readout, TURBO, the volume meter, toasts and the save-state browser, and looks the same for every core. |
 | `state/` | `retro_state`: the savestate envelope. The runner writes and checks it; hosts list it. |
 | `runner/` | `retro-core-runner`, the child process that loads a core and runs it: headless, or linked to a host. Also `retro_core_support`, the sidecar-manifest reader and core loader hosts use. |
 | `tests/rcore_fake_core.c` | The smallest core, for tests. |

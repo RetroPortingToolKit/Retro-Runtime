@@ -39,7 +39,11 @@ constexpr std::uint32_t kProtocolMajor = 2;
 // 2.1 (2026-10-01): AccessoryData (hub -> runner) and AccessoryNotify
 // (runner -> hub), the bytes of a data accessory (rcore rev 7, docs/CORE_ABI.md
 // "Accessory data"). Append-only: two new message types, nothing grown.
-constexpr std::uint32_t kProtocolMinor = 1;
+// 2.2 (2026-10-08): FrameDone grows game_frame and work_ns, the
+// numbers behind the overlay's FPS / VI / ms-per-VI readout. The first grown
+// message: a 2.2 runner sends it at its 2.1 size to a 2.1 hub, and a 2.2 hub
+// reads a 2.1 runner's with both fields zero.
+constexpr std::uint32_t kProtocolMinor = 2;
 // A link only comes up between peers of the same major, and a new major
 // carries every message the old one had: savestates arrived in 1.1, so a 2.x
 // peer has them whatever its minor. Gate on this, never on the minor alone.
@@ -49,6 +53,10 @@ constexpr bool link_has_savestates(std::uint32_t peer_minor) {
 // Accessory data arrived in 2.1.
 constexpr bool link_has_accessory_data(std::uint32_t peer_minor) {
     return kProtocolMajor > 2 || peer_minor >= 1;
+}
+// FrameDone's frame statistics arrived in 2.2.
+constexpr bool link_has_frame_stats(std::uint32_t peer_minor) {
+    return kProtocolMajor > 2 || peer_minor >= 2;
 }
 constexpr char kMagic[8] = {'R', 'C', 'L', 'I', 'N', 'K', '1', '\0'};
 
@@ -181,7 +189,15 @@ struct FrameDoneMsg {
     std::uint64_t frame_number;
     std::int32_t result; // run_frame's rcore_result
     std::uint32_t _pad;
+    // 2.2. What the overlay's readout is made of, so it can tell the rate the
+    // machine runs at from the rate the game draws at. All 0 from a 2.1 runner.
+    std::uint64_t game_frame; // rcore_frame::game_frame at the core's last video_submit
+                              // (rev 8); 0 = the core does not count the game's pictures
+    std::uint64_t work_ns;    // how long this grant's run_frame took on the core
+                              // thread (resims included; a netplay stall is not)
 };
+// FrameDone as protocol 2.1 sent it, for a peer speaking 2.1.
+constexpr std::size_t kFrameDoneSize21 = 24;
 
 struct LogMsg {
     MsgHeader h;
@@ -272,7 +288,8 @@ static_assert(kMaxMsgSize >= sizeof(SaveRegionsMsg) && kMaxMsgSize >= sizeof(Log
 // Linux GCC build laid it out when protocol 1.0 shipped; a compiler that
 // disagrees fails here instead of corrupting a session (LINK_TRANSPORTS.md §6).
 // Measured 2026-09-26 on GCC 16 x86_64 and confirmed identical on MinGW-w64.
-// A change to any line below is a protocol major bump.
+// A change to any offset below is a protocol major bump. A minor appends
+// fields and adds their lines (and so grows a sizeof); it moves nothing.
 
 static_assert(sizeof(FrameInfo) == 32 && alignof(FrameInfo) == 8, "FrameInfo");
 static_assert(offsetof(FrameInfo, width) == 0, "FrameInfo::width");
@@ -324,10 +341,12 @@ static_assert(sizeof(SaveRegionsMsg) == 1168 && alignof(SaveRegionsMsg) == 8, "S
 static_assert(offsetof(SaveRegionsMsg, h) == 0, "SaveRegionsMsg::h");
 static_assert(offsetof(SaveRegionsMsg, count) == 8, "SaveRegionsMsg::count");
 static_assert(offsetof(SaveRegionsMsg, region) == 16, "SaveRegionsMsg::region");
-static_assert(sizeof(FrameDoneMsg) == 24 && alignof(FrameDoneMsg) == 8, "FrameDoneMsg");
+static_assert(sizeof(FrameDoneMsg) == 40 && alignof(FrameDoneMsg) == 8, "FrameDoneMsg");
 static_assert(offsetof(FrameDoneMsg, h) == 0, "FrameDoneMsg::h");
 static_assert(offsetof(FrameDoneMsg, frame_number) == 8, "FrameDoneMsg::frame_number");
 static_assert(offsetof(FrameDoneMsg, result) == 16, "FrameDoneMsg::result");
+static_assert(offsetof(FrameDoneMsg, game_frame) == kFrameDoneSize21, "FrameDoneMsg::game_frame");
+static_assert(offsetof(FrameDoneMsg, work_ns) == 32, "FrameDoneMsg::work_ns");
 static_assert(sizeof(LogMsg) == 1036 && alignof(LogMsg) == 4, "LogMsg");
 static_assert(offsetof(LogMsg, h) == 0, "LogMsg::h");
 static_assert(offsetof(LogMsg, level) == 8, "LogMsg::level");

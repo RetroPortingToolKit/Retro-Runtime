@@ -48,7 +48,7 @@ extern "C" {
 
 #define RCORE_ABI_MAJOR 0u /* 0 = draft; the first implemented contract is 1 */
 #define RCORE_ABI_MINOR 0u
-#define RCORE_DRAFT_REVISION 7u /* draft-only counter; see docs/CORE_ABI.md */
+#define RCORE_DRAFT_REVISION 8u /* draft-only counter; see docs/CORE_ABI.md */
 
 #if defined(_WIN32)
 #  define RCORE_EXPORT __declspec(dllexport)
@@ -128,6 +128,13 @@ typedef struct rcore_frame {
     uint32_t _pad0;
     const void* pixels;           /* valid only for the duration of video_submit() */
     uint64_t frame_number;        /* core's own count, monotonically increasing */
+    /* rev 8. Pictures the GAME has finished, as distinct from the frames the
+     * machine ran: an N64 game drawing at 30 fps runs 60 VI fields a second
+     * and finishes 30 pictures. Counted from load(); 0 = the core cannot tell
+     * them apart (or none finished yet). A host reads it only when
+     * struct_size covers it, and only for its readout: never for pacing,
+     * never for netplay. */
+    uint64_t game_frame;
 } rcore_frame;
 
 /* ------------------------------------------------------------------------ */
