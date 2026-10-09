@@ -425,4 +425,4 @@ first answered that way and every savestate scenario diverged from headless
    for the CPU frame blocks the emulator 6.7 ms a field in Pokemon Stadium's
    intro, and on desktop VI/present is 10-18 % of CPU. The owner chose GPU
    frames, item 3; the draft is n64lle `docs/DEVICE-PRESENTATION.md` §3,
-   rev 9 / link 2.3, pending the owner's ruling on its open questions.)*
+   rev 9 / link 2.3; ruled 2026-10-09: rev 9 + link 2.3, a core-allocated ring, a per-field CPU fallback.)*
