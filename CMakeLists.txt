@@ -111,6 +111,7 @@ if(RETRO_RUNTIME_TOOLS)
     add_executable(retro-core-runner
         runner/runner_main.cpp
         runner/runner_link.cpp
+        runner/perf_hint.cpp
         runner/host_session.cpp
         runner/state_keeper.cpp
         runner/net_session.cpp

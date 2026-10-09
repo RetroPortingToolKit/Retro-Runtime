@@ -311,6 +311,48 @@ checkout>`; `--version` then says `netplay 1`, otherwise `netplay 0` and every
   (`CORE_ABI.md`, "Accessory data").
 - **Not built:** NAT traversal, a spectator seat, and play over a real network.
 
+## Performance hints (Android, 2026-10-09)
+
+Over the link the runner idles between grants, because the hub paces them by
+its audio queue. With a GPU renderer it also waits on the GPU inside a frame.
+Android's frequency governor reads that idle time as low load and lowers the
+CPU clock, and the frame's CPU work then runs slow.
+
+Measured on a Pixel 6 Pro with n64lle's Pokemon Stadium (Vulkan renderer,
+`rcore_probe`, no hint):
+- The Cortex-X1 ran at 0.85-2.0 GHz through the intro.
+- Its ceiling (`scaling_max_freq`) stayed at 2.8 GHz, and thermal status was
+  0.
+- The software renderer, whose thread never waits, held 2.4-2.8 GHz.
+
+`runner/perf_hint.*` opens an ADPF performance hint session
+(`APerformanceHint`, Android 13 / API 33):
+- **Deadline and reports.** Its target is the core's frame period
+  (`set_frame_rate`, else the hub's 60 Hz). Each grant reports the frame's
+  measured work (`FrameDone.work_ns`). The system then sets the clock for
+  the deadline instead of guessing from idle time.
+- **Threads.** The session names every thread of the runner at the first
+  frame, the core's own workers included. On API 34+ it widens
+  (`APerformanceHint_setThreads`) when the core starts more later.
+- **Resolved at run time** through `dlopen("libandroid.so")`. Retro-Launcher's
+  floor is API 30, and a link-time reference would refuse to load below 33.
+  Off Android every call is a no-op.
+- **`runner.log` says which it is**, once:
+  - `perf_hint: ADPF session on N thread(s), target T ms (API A)`;
+  - `perf_hint: unavailable (...)`, with why;
+  - `perf_hint: off (RETRO_PERF_HINT=0)`.
+
+**Measured in Retro-Launcher** on the same phone, Vulkan, with the hint:
+- `runner.log`: `ADPF session on 13 thread(s), target 16.667 ms (API 37)`.
+- The X1 mostly held 2.0-2.5 GHz through the intro, against 0.85-1.4 GHz in
+  the same scene without the hint (headless).
+
+**What the hint does not fix:** the intro's sky scene still ran at about 25
+VI/s. There the Vulkan renderer leaves the frame waiting on the GPU about 40 %
+of the time. That is n64lle's synchronous readback, and no clock removes it.
+
+**Not measured:** a same-session before/after of the hint in the launcher.
+
 ## Not built yet
 
 - **The savestate envelope** and its refuse-on-mismatch rule.

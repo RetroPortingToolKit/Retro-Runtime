@@ -1,4 +1,5 @@
 #include "runner_link.hpp"
+#include "perf_hint.hpp"
 #include "sha256.hpp"
 
 #include "../corelink/link_io.hpp"
@@ -193,6 +194,8 @@ public:
     }
 
     void frame_rate(std::uint32_t num, std::uint32_t den) override {
+        rate_num = num;
+        rate_den = den;
         shm_->frame_rate.store((std::uint64_t(num) << 32) | den, std::memory_order_release);
     }
 
@@ -216,6 +219,8 @@ public:
     std::uint64_t last_game_frame = 0;
     std::uint32_t faults = 0;
     std::uint32_t bad_frames = 0;
+    // The core's stated frame rate (set_frame_rate), 0/0 until it states one.
+    std::uint32_t rate_num = 0, rate_den = 0;
 
 private:
     Channel& sock_;
@@ -443,6 +448,11 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
     if (!send_msg(sock, ready)) return 2;
 
     // ---- one frame per grant, until Quit or the hub goes away ---------------
+    // Each frame's work against its deadline, for the system's clock governor
+    // (perf_hint.hpp): the runner idles between grants, which it would read as
+    // low load. The deadline is the core's frame period, else the hub's 60 Hz.
+    PerfHint hint;
+    bool hint_said = false;
     int code = 0;
     for (;;) {
         const RecvResult rr = recv_packet(sock, buf, nullptr, -1);
@@ -558,6 +568,15 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         }
         done.game_frame = sink.last_game_frame;
         send_msg_sized(sock, done, frame_done_size);
+        const std::uint64_t period_ns =
+            sink.rate_num && sink.rate_den
+                ? std::uint64_t(1000000000) * sink.rate_den / sink.rate_num
+                : std::uint64_t(1000000000) / 60;
+        hint.frame(done.work_ns, period_ns);
+        if (!hint.status().empty() && !hint_said) {
+            std::fprintf(stderr, "%s\n", hint.status().c_str());
+            hint_said = true;
+        }
         if (sink.bad_frames) {
             code = exiting(sock, 1, "the core submitted a frame this link cannot carry "
                                     "(format, or larger than 1024x1024)");
