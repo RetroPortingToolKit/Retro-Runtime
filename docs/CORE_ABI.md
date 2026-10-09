@@ -421,3 +421,8 @@ first answered that way and every savestate scenario diverged from headless
 6. **Resolved (2026-09-24).** n64lle's GL is compute only and its output still
    leaves as a CPU frame, so a lent context (ruling 1) is enough. No GPU-frame
    path is needed for it.
+   *(Reopened 2026-10-09: on a Pixel 6 Pro under Vulkan, landing each field
+   for the CPU frame blocks the emulator 6.7 ms a field in Pokemon Stadium's
+   intro, and on desktop VI/present is 10-18 % of CPU. The owner chose GPU
+   frames, item 3; the draft is n64lle `docs/DEVICE-PRESENTATION.md` §3,
+   rev 9 / link 2.3, pending the owner's ruling on its open questions.)*
