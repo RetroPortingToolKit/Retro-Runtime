@@ -17,6 +17,16 @@
 // The session names the runner's threads at its first frame (the core's own
 // workers included, whichever it has started by then) and is refreshed when
 // that set grows, where the API allows it (34+). RETRO_PERF_HINT=0 disables it.
+//
+// HEADROOM, AND THE FAST CORES (2026-10-09). A target equal to the frame
+// period lets the governor settle where the work just fits: in Retro-Launcher
+// on a Pixel 6 Pro the X1 held a median 2.05 GHz of its 2.8, the field took
+// 15-20 ms against 16.7, and the emulation thread spent 16 % of its time on
+// the A76 and A55 cores. So the session asks for a fraction of the period
+// (RETRO_PERF_HINT_TARGET, percent, default 70), and the thread that runs the
+// frames is pinned to the CPUs with the highest cpuinfo_max_freq
+// (RETRO_PIN_FAST=0 leaves it to the scheduler). Battery and heat are not
+// reasons to hold back here (the owner's ruling): a game wants its frames.
 
 #include <cstdint>
 #include <string>
@@ -40,6 +50,7 @@ public:
 
 private:
     void open(std::uint64_t target_ns);
+    std::uint64_t scaled(std::uint64_t period_ns) const;
     void refresh_threads();
 
     bool tried_ = false;
@@ -47,6 +58,7 @@ private:
     std::uint64_t target_ns_ = 0;
     std::uint64_t frames_ = 0;
     std::size_t threads_ = 0;
+    unsigned target_pct_ = 70;
     std::string status_;
 };
 

@@ -353,6 +353,25 @@ of the time. That is n64lle's synchronous readback, and no clock removes it.
 
 **Not measured:** a same-session before/after of the hint in the launcher.
 
+**Headroom and the fast cores** (2026-10-09). With the target equal to the
+frame period, the governor settled where the work just fits. In the owner's
+Accurate run (n64lle `d5204f1f`) the X1's median was 2.05 GHz, the field took
+15-20 ms, and the owner saw stutter. Two changes:
+- **The target** is now a fraction of the period: `RETRO_PERF_HINT_TARGET`,
+  percent, default 70.
+- **The frame thread is pinned** to the CPUs with the highest
+  `cpuinfo_max_freq` (on the Pixel 6 Pro, cpu 6-7 at 2,802 MHz).
+  `RETRO_PIN_FAST=0` leaves it to the scheduler.
+
+`runner.log` names both:
+- `perf_hint: affinity: the frame thread on cpu 6,7 (2802 MHz)`;
+- `target 11.667 ms (70 % of the 16.667 ms period)`.
+
+The owner: "stutter improved a lot", 16-18 ms per VI with a dip in the flight
+scene. The X1's median stayed at 2.05 GHz: the clock, not the waits, is what
+is left there. Battery and heat are not reasons to hold these back (the
+owner's ruling, 2026-10-09).
+
 ## Not built yet
 
 - **The savestate envelope** and its refuse-on-mismatch rule.

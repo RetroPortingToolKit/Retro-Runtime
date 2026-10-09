@@ -4,10 +4,13 @@
 #include <android/api-level.h>
 #include <dirent.h>
 #include <dlfcn.h>
+#include <sched.h>
 
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <type_traits>
 #include <vector>
 #endif
@@ -63,14 +66,63 @@ std::vector<std::int32_t> process_threads() {
     return tids;
 }
 
+/* Pin the calling thread to the CPUs whose cpuinfo_max_freq is the highest
+(the big cluster, read from sysfs so it holds on any SoC). A description for
+runner.log, or why not. */
+std::string pin_to_fastest_cpus() {
+    if (const char* e = std::getenv("RETRO_PIN_FAST"); e && std::strcmp(e, "0") == 0) {
+        return "affinity: left to the scheduler (RETRO_PIN_FAST=0)";
+    }
+    long best = 0;
+    std::vector<int> cpus;
+    for (int c = 0; c < CPU_SETSIZE; ++c) {
+        char path[96];
+        std::snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", c);
+        std::FILE* f = std::fopen(path, "r");
+        if (!f) {
+            if (c > 64) break;
+            continue;
+        }
+        long khz = 0;
+        if (std::fscanf(f, "%ld", &khz) != 1) khz = 0;
+        std::fclose(f);
+        if (khz > best) {
+            best = khz;
+            cpus.clear();
+        }
+        if (khz == best && khz > 0) cpus.push_back(c);
+    }
+    if (cpus.empty()) return "affinity: no cpufreq in sysfs; left to the scheduler";
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    for (int c : cpus) CPU_SET(c, &set);
+    if (sched_setaffinity(0, sizeof set, &set) != 0) {
+        return std::string("affinity: sched_setaffinity refused (") + std::strerror(errno) + ")";
+    }
+    std::string list;
+    for (int c : cpus) list += (list.empty() ? "" : ",") + std::to_string(c);
+    return "affinity: the frame thread on cpu " + list + " (" + std::to_string(best / 1000) + " MHz)";
+}
+
 } // namespace
+
+std::uint64_t PerfHint::scaled(std::uint64_t period_ns) const {
+    return period_ns * target_pct_ / 100;
+}
 
 PerfHint::~PerfHint() {
     if (session_) adpf().close(session_);
 }
 
-void PerfHint::open(std::uint64_t target_ns) {
+void PerfHint::open(std::uint64_t period_ns) {
     const int api = android_get_device_api_level();
+    const std::string pin = pin_to_fastest_cpus();
+    if (const char* e = std::getenv("RETRO_PERF_HINT_TARGET")) {
+        const long v = std::strtol(e, nullptr, 10);
+        if (v >= 10 && v <= 100) target_pct_ = static_cast<unsigned>(v);
+    }
+    const std::uint64_t target_ns = scaled(period_ns);
+    std::fprintf(stderr, "perf_hint: %s\n", pin.c_str());
     if (const char* e = std::getenv("RETRO_PERF_HINT"); e && std::strcmp(e, "0") == 0) {
         status_ = "perf_hint: off (RETRO_PERF_HINT=0)";
         return;
@@ -93,10 +145,10 @@ void PerfHint::open(std::uint64_t target_ns) {
     }
     target_ns_ = target_ns;
     threads_ = tids.size();
-    char line[160];
+    char line[224];
     std::snprintf(line, sizeof line,
-                  "perf_hint: ADPF session on %zu thread(s), target %.3f ms (API %d%s)",
-                  threads_, target_ns / 1e6, api,
+                  "perf_hint: ADPF session on %zu thread(s), target %.3f ms (%u %% of the %.3f ms period; API %d%s)",
+                  threads_, target_ns / 1e6, target_pct_, period_ns / 1e6, api,
                   a.set_threads ? "" : "; the thread set is fixed at the first frame");
     status_ = line;
 }
@@ -119,8 +171,9 @@ void PerfHint::frame(std::uint64_t work_ns, std::uint64_t target_ns) {
     }
     if (!session_) return;
     const Adpf& a = adpf();
-    if (target_ns && target_ns != target_ns_) {
-        if (a.update_target(session_, static_cast<std::int64_t>(target_ns)) == 0) target_ns_ = target_ns;
+    if (target_ns && scaled(target_ns) != target_ns_) {
+        const std::uint64_t t = scaled(target_ns);
+        if (a.update_target(session_, static_cast<std::int64_t>(t)) == 0) target_ns_ = t;
     }
     if (work_ns && a.report(session_, static_cast<std::int64_t>(work_ns)) != 0) {
         // EPIPE: the system closed the session (e.g. hint sessions turned off).
