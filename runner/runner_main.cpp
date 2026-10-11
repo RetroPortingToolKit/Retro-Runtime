@@ -514,6 +514,29 @@ int main(int argc, char** argv) {
     // ---- load: hash the file that is loaded, then the one symbol ---------
     LoadedCore core;
     std::string err;
+    /* A DEVELOPER'S ENVIRONMENT FOR A SESSION (2026-10-09). A runner the
+    launcher starts on Android inherits no shell, so `<out>/runner.env` --
+    KEY=VALUE lines, '#' comments -- is applied before the core loads, each
+    line said on stderr (runner.log). For A/B toggles (RETRO_PERF_HINT,
+    RETRO_PIN_FAST) and the core's getenv() diagnostics inside a real session.
+    Absent: nothing changes. */
+    if (!out.empty()) {
+        std::ifstream envf(out / "runner.env");
+        std::string line;
+        while (envf && std::getline(envf, line)) {
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+            if (line.empty() || line[0] == '#') continue;
+            const std::size_t eq = line.find('=');
+            if (eq == std::string::npos || eq == 0) continue;
+            const std::string key = line.substr(0, eq), val = line.substr(eq + 1);
+#if defined(_WIN32)
+            _putenv_s(key.c_str(), val.c_str());
+#else
+            setenv(key.c_str(), val.c_str(), 1);
+#endif
+            std::fprintf(stderr, "runner.env: %s=%s\n", key.c_str(), val.c_str());
+        }
+    }
     if (!load_core(retro::corelink::utf8_path(core_path), core, &err)) die(err);
     const rcore_core_info& info = *core.info;
     // --describe's stdout is its records alone: the lines a run prints about

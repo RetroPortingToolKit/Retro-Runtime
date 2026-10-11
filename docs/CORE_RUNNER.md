@@ -372,6 +372,21 @@ scene. The X1's median stayed at 2.05 GHz: the clock, not the waits, is what
 is left there. Battery and heat are not reasons to hold these back (the
 owner's ruling, 2026-10-09).
 
+## A session's environment: `<out>/runner.env` (2026-10-09)
+
+A runner the launcher starts on Android inherits no shell, so the
+environment knobs above (`RETRO_PERF_HINT`, `RETRO_PIN_FAST`,
+`RETRO_PERF_HINT_TARGET`) and a core's own `getenv()` diagnostics have no
+way in. Before the core loads, the runner reads `runner.env` in its `--out`
+directory: `KEY=VALUE` lines, `#` comments, applied with `setenv` and each
+said on stderr (`runner.env: KEY=VALUE` in runner.log). Absent, nothing
+changes. It is a developer's tool for A/B runs inside a real session, for
+example n64lle's per-field device trace:
+
+```text
+N64LLE_RDP_GL_DTRACE=/data/user/0/<package>/files/data/retcomm/sessions/<slug>/dtrace.txt
+```
+
 ## Not built yet
 
 - **The savestate envelope** and its refuse-on-mismatch rule.
