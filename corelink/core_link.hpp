@@ -130,7 +130,9 @@ public:
     bool can_grant() const {
         return state_ == LinkState::Ready && outstanding_ == 0 && !state_pending_;
     }
-    bool grant(const rcore_pad pads[RCORE_MAX_SEATS]);
+    // Available physical pixels before letterboxing; zeros when unknown.
+    bool grant(const rcore_pad pads[RCORE_MAX_SEATS], std::uint32_t width = 0,
+               std::uint32_t height = 0);
     std::uint64_t frames_granted() const { return granted_; }
     std::uint64_t frames_done() const { return done_; }
     const FrameStats& frame_stats() const { return stats_; }

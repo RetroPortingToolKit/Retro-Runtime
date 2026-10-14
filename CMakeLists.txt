@@ -211,6 +211,17 @@ if(RETRO_RUNTIME_TOOLS)
                 --out ${CMAKE_CURRENT_BINARY_DIR}/test-link)
     set_tests_properties(link_fake_core PROPERTIES
         PASS_REGULAR_EXPRESSION "10 frame\\(s\\) granted and done, runner exit 0")
+    add_test(NAME link_presentation_size
+        COMMAND ${CMAKE_COMMAND}
+            -DLINK_TEST=$<TARGET_FILE:retro-core-link-test>
+            -DRUNNER=$<TARGET_FILE:retro-core-runner>
+            -DCORE=$<TARGET_FILE:rcore_fake_core>
+            -DROM=${CMAKE_CURRENT_SOURCE_DIR}/LICENSE
+            -DOUT=${CMAKE_CURRENT_BINARY_DIR}/test-presentation
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/presentation_test.cmake)
+    add_executable(retro-presentation-protocol-test tests/presentation_protocol_test.cpp)
+    target_link_libraries(retro-presentation-protocol-test PRIVATE retro_corelink)
+    add_test(NAME presentation_protocol COMMAND retro-presentation-protocol-test)
     # Link 2.2: FrameDone carries the game's count and the runner's timing.
     add_test(NAME link_frame_stats
         COMMAND retro-core-link-test --runner $<TARGET_FILE:retro-core-runner>

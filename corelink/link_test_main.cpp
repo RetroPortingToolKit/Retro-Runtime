@@ -80,6 +80,7 @@ int main(int argc, char** argv) {
     spec.gl = false;
     std::uint64_t frames = 60;
     bool seat0 = true;
+    bool presentation_test = false;
     std::vector<std::pair<std::uint64_t, std::uint32_t>> script;
     struct StateOp {
         std::uint64_t at;
@@ -154,6 +155,7 @@ int main(int argc, char** argv) {
         else if (a == "--gl") spec.gl = true;
         else if (a == "--strict") spec.strict = true;
         else if (a == "--no-seats") seat0 = false;
+        else if (a == "--presentation-test") presentation_test = true;
         else if (a == "--opt") {
             const std::string kv = val();
             const auto eq = kv.find('=');
@@ -242,7 +244,10 @@ int main(int argc, char** argv) {
                 if (at <= k) pads[0].buttons = buttons;
             }
         }
-        if (!link.grant(pads)) die("grant " + std::to_string(k) + " refused");
+        // Fixture exercises resize, unavailable/minimized, then recovery.
+        const std::uint32_t pw = presentation_test && k != 3 ? (k == 1 ? 1280 : 2560) : 0;
+        const std::uint32_t ph = presentation_test && k != 3 ? (k == 1 ? 720 : 1080) : 0;
+        if (!link.grant(pads, pw, ph)) die("grant " + std::to_string(k) + " refused");
         while (link.state() == LinkState::Ready && link.frames_done() < k) link.pump(100);
         print_notifies();
         if (link.state() != LinkState::Ready) ok = false;

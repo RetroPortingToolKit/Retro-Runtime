@@ -29,6 +29,14 @@ HostSession::HostSession(const LoadedCore& core, Sink& sink) : core_(core), sink
     host_.set_frame_rate = h_frame_rate;
     host_.accessory_poll = h_accessory_poll;
     host_.accessory_notify = h_accessory_notify;
+    host_.presentation_size = h_presentation_size;
+}
+
+std::uint32_t HostSession::h_presentation_size(void* ctx, std::uint32_t* width, std::uint32_t* height) {
+    const auto* s = self(ctx);
+    if (width) *width = s->presentation_width_;
+    if (height) *height = s->presentation_height_;
+    return s->presentation_width_ && s->presentation_height_ ? 1u : 0u;
 }
 
 void HostSession::bind_data_accessory(std::uint32_t seat, std::uint32_t slot) {

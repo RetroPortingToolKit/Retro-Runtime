@@ -43,7 +43,11 @@ constexpr std::uint32_t kProtocolMajor = 2;
 // numbers behind the overlay's FPS / VI / ms-per-VI readout. The first grown
 // message: a 2.2 runner sends it at its 2.1 size to a 2.1 hub, and a 2.2 hub
 // reads a 2.1 runner's with both fields zero.
-constexpr std::uint32_t kProtocolMinor = 2;
+// 2.3: Grant appends the available drawable pixel area (rcore rev 9).
+constexpr std::uint32_t kProtocolMinor = 3;
+constexpr bool link_has_presentation_size(std::uint32_t peer_minor) {
+    return kProtocolMajor > 2 || peer_minor >= 3;
+}
 // A link only comes up between peers of the same major, and a new major
 // carries every message the old one had: savestates arrived in 1.1, so a 2.x
 // peer has them whatever its minor. Gate on this, never on the minor alone.
@@ -233,7 +237,10 @@ struct GrantMsg {
     MsgHeader h;
     std::uint64_t frame_number; // 1-based, as the headless runner counts
     rcore_pad pads[RCORE_MAX_SEATS];
+    // 2.3: before letterboxing; both zero means unavailable.
+    std::uint32_t presentation_width, presentation_height;
 };
+constexpr std::size_t kGrantSize22 = 240;
 
 struct EmptyMsg {
     MsgHeader h;
@@ -364,10 +371,12 @@ static_assert(offsetof(ExitingMsg, reason) == 12, "ExitingMsg::reason");
 static_assert(sizeof(SavesFilledMsg) == 232 && alignof(SavesFilledMsg) == 4, "SavesFilledMsg");
 static_assert(offsetof(SavesFilledMsg, h) == 0, "SavesFilledMsg::h");
 static_assert(offsetof(SavesFilledMsg, pads) == 8, "SavesFilledMsg::pads");
-static_assert(sizeof(GrantMsg) == 240 && alignof(GrantMsg) == 8, "GrantMsg");
+static_assert(sizeof(GrantMsg) == 248 && alignof(GrantMsg) == 8, "GrantMsg");
 static_assert(offsetof(GrantMsg, h) == 0, "GrantMsg::h");
 static_assert(offsetof(GrantMsg, frame_number) == 8, "GrantMsg::frame_number");
 static_assert(offsetof(GrantMsg, pads) == 16, "GrantMsg::pads");
+static_assert(offsetof(GrantMsg, presentation_width) == kGrantSize22, "GrantMsg::presentation_width");
+static_assert(offsetof(GrantMsg, presentation_height) == 244, "GrantMsg::presentation_height");
 static_assert(sizeof(EmptyMsg) == 8 && alignof(EmptyMsg) == 4, "EmptyMsg");
 static_assert(offsetof(EmptyMsg, h) == 0, "EmptyMsg::h");
 static_assert(sizeof(rcore_pad) == 28 && alignof(rcore_pad) == 4, "rcore_pad");

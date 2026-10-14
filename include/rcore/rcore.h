@@ -48,7 +48,7 @@ extern "C" {
 
 #define RCORE_ABI_MAJOR 0u /* 0 = draft; the first implemented contract is 1 */
 #define RCORE_ABI_MINOR 0u
-#define RCORE_DRAFT_REVISION 8u /* draft-only counter; see docs/CORE_ABI.md */
+#define RCORE_DRAFT_REVISION 9u /* draft-only counter; see docs/CORE_ABI.md */
 
 #if defined(_WIN32)
 #  define RCORE_EXPORT __declspec(dllexport)
@@ -415,6 +415,13 @@ typedef struct rcore_host_api {
      * a frame. */
     void (*accessory_notify)(void* host_ctx, uint32_t seat, uint32_t slot,
                              const void* data, size_t len);
+    /* --- appended in draft revision 9: host presentation area --- */
+    /* Available drawable area in physical pixels, BEFORE aspect letterboxing.
+     * Returns 1 and nonzero dimensions when known, 0 and zeros otherwise.
+     * Optional: check struct_size before reading this slot. Stable throughout
+     * a granted frame, including its resim calls. Presentation policy only;
+     * never guest input, session identity, or serialized simulation state. */
+    uint32_t (*presentation_size)(void* host_ctx, uint32_t* width, uint32_t* height);
 } rcore_host_api;
 
 /* ------------------------------------------------------------------------ */

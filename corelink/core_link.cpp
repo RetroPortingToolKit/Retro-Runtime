@@ -218,13 +218,18 @@ void CoreLink::handle_packet(const std::vector<unsigned char>& buf,
     }
 }
 
-bool CoreLink::grant(const rcore_pad pads[RCORE_MAX_SEATS]) {
+bool CoreLink::grant(const rcore_pad pads[RCORE_MAX_SEATS], std::uint32_t width, std::uint32_t height) {
     if (!can_grant()) return false;
     GrantMsg g{};
     g.h.type = Msg::Grant;
     g.frame_number = granted_ + 1;
     for (std::uint32_t i = 0; i < RCORE_MAX_SEATS; ++i) g.pads[i] = pads[i];
-    if (!send_msg(channel_, g)) return false;
+    if (width && height) {
+        g.presentation_width = width;
+        g.presentation_height = height;
+    }
+    const auto bytes = link_has_presentation_size(identity_.protocol_minor) ? sizeof(g) : kGrantSize22;
+    if (!send_msg_sized(channel_, g, bytes)) return false;
     ++granted_;
     ++outstanding_;
     return true;

@@ -70,6 +70,10 @@ public:
 
     // The host table the core is given. Stable for the session's lifetime.
     const rcore_host_api* host_api() const { return &host_; }
+    void set_presentation_size(std::uint32_t width, std::uint32_t height) {
+        presentation_width_ = width && height ? width : 0;
+        presentation_height_ = width && height ? height : 0;
+    }
 
     // After load(): allocate every declared region, filled with its erase
     // value, then from `files[id]` where one is given.
@@ -131,6 +135,7 @@ private:
     static void* h_gl_proc(void*, const char*);
     static std::uint64_t h_wall_clock(void*);
     static void h_frame_rate(void*, std::uint32_t, std::uint32_t);
+    static std::uint32_t h_presentation_size(void*, std::uint32_t*, std::uint32_t*);
     static std::size_t h_accessory_poll(void*, std::uint32_t, std::uint32_t, void*, std::size_t);
     static void h_accessory_notify(void*, std::uint32_t, std::uint32_t, const void*, std::size_t);
 
@@ -145,6 +150,7 @@ private:
     const LoadedCore& core_;
     Sink& sink_;
     rcore_host_api host_{};
+    std::uint32_t presentation_width_ = 0, presentation_height_ = 0;
     std::map<std::string, std::optional<std::string>> options_;
     std::vector<SaveRegion> regions_;
     std::vector<AccessoryQueue> accessories_;
