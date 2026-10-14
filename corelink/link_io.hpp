@@ -40,8 +40,8 @@ inline bool packet_type(const std::vector<unsigned char>& buf, Msg& out) {
 // packet is read and its tail ignored; an older peer may not have sent fields
 // this side appended, so a packet down to `min_size` -- the message's size
 // before its first appended field -- is read and the rest zeroed. FrameDone
-// grew in 2.2 (its reader passes kFrameDoneSize21); every other reader passes
-// sizeof(M).
+// grew in 2.2 (kFrameDoneSize21), Grant in 2.3 (kGrantSize22); unchanged
+// message readers pass sizeof(M).
 //
 // A 1.0 peer still demands the exact 1.0 size. A message that grows must
 // therefore be sent at its old size to a session speaking an older minor

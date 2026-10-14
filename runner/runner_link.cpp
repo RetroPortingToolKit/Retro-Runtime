@@ -504,12 +504,13 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
             continue;
         }
         GrantMsg g{};
-        if (t != Msg::Grant || !as_msg(buf, g)) {
+        if (t != Msg::Grant || !as_msg(buf, g, kGrantSize22)) {
             code = exiting(sock, 2, "link: unexpected message from the hub");
             break;
         }
         std::copy(std::begin(g.pads), std::end(g.pads), std::begin(sink.pads));
         sink.frame_number = g.frame_number;
+        session.set_presentation_size(g.presentation_width, g.presentation_height);
         // Everything that arrived before this grant is the frame's accessory
         // sequence; a message that arrives while the frame runs waits for the
         // next (the runner reads nothing from the hub mid-frame).

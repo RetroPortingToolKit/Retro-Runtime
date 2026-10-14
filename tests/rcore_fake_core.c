@@ -275,6 +275,16 @@ static void die_now(void) {
 
 static rcore_result run_frame(void) {
     ++g_frames;
+    if (g_host->struct_size >= offsetof(rcore_host_api, presentation_size) + sizeof(g_host->presentation_size) &&
+        g_host->presentation_size) {
+        uint32_t w = 99, h = 99, w2 = 0, h2 = 0;
+        uint32_t known = g_host->presentation_size(g_host->host_ctx, &w, &h);
+        uint32_t known2 = g_host->presentation_size(g_host->host_ctx, &w2, &h2);
+        char line[160];
+        if (known != known2 || w != w2 || h != h2 || (!known && (w || h))) return RCORE_ERR_STATE;
+        snprintf(line, sizeof line, "FAKE_PRESENTATION frame=%llu known=%u size=%ux%u", g_frames, known, w, h);
+        g_host->log(g_host->host_ctx, RCORE_LOG_INFO, line);
+    }
     if (g_crash_at && g_frames == g_crash_at) die_now();
 #if defined(FAKE_ACCESSORY_DATA)
     {

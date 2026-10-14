@@ -63,6 +63,17 @@ region's layout: a major, so a 1.x peer is refused at hello.
 (hub to runner) and `AccessoryNotify = 9` (runner to hub), described under
 "Accessory data" below. Two new message types, nothing grown.
 
+**2.3** (2026-10-14) appends `presentation_width` and `presentation_height`
+to `Grant` (248 bytes; its 2.2 prefix remains 240 bytes). The hub sends the
+available drawable area in physical pixels **before** aspect letterboxing;
+zero in either dimension means unavailable. The runner stores it before the
+grant runs and serves it through rcore rev 9 `presentation_size`, unchanged
+for the grant and its resim calls. Headless sessions report unavailable.
+A 2.3 hub sends only the 240-byte prefix to an older runner; a 2.3 runner
+accepts an older hub's prefix with both dimensions zero. Frame slots and
+shared memory do not change. This local presentation state is neither pad
+input nor netplay identity and does not enter serialized simulation state.
+
 **2.2** (2026-10-08) grows `FrameDone`, the first message to grow. It appends
 `game_frame` (rcore rev 8: pictures the game finished, as of the core's last
 picture; 0 = the core does not say) and `work_ns` (how long `run_frame` took on the core thread, resims included, a
