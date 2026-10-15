@@ -1,7 +1,12 @@
 // Included by net_session.cpp ONLY, after the recomp-net headers: turns each
 // call it makes into a call through the loaded module (net_module_api.hpp).
 #pragma once
+
 #include "net_module_api.hpp"
+
+#define rnet_session_profiles_begin (::retro::runner::g_nm.rnet_session_profiles_begin)
+#define rnet_session_profiles_status (::retro::runner::g_nm.rnet_session_profiles_status)
+#define rnet_session_profiles_peer (::retro::runner::g_nm.rnet_session_profiles_peer)
 
 #define rnet_rb_driver_confirmed_through (::retro::runner::g_nm.rnet_rb_driver_confirmed_through)
 #define rnet_rb_driver_create (::retro::runner::g_nm.rnet_rb_driver_create)

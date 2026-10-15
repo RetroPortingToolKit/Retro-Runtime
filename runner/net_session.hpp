@@ -56,6 +56,10 @@ public:
 
     // True when this runner was built with recomp-net.
     static bool compiled_in();
+    // Before core init/boot: exchange qualified profiles, lock the agreement
+    // into init params. Legacy cores keep their existing startup behavior.
+    bool prepare(const LoadedCore& core, const NetParams& p,
+                 rcore_init_params& init, std::string* error);
     // Opens the transport and starts the driver. The core must be loaded and
     // at the boundary frame 1 runs from. False with *error saying why (a core
     // without ROLLBACK, a bad address, the driver's refusal).

@@ -9,6 +9,7 @@
 extern "C" {
 #include "recomp_net/rb_driver.h"
 #include "recomp_net/session.h"
+#include "recomp_net/startup_profiles.h"
 }
 #if defined(RETRO_RUNNER_NETPLAY_MODULE)
 #include "net_module.hpp"
@@ -73,6 +74,9 @@ struct NetSession::Impl {
     std::string ended;
     std::uint32_t started_ms = 0;
     bool was_running = false;
+    bool profile_agreed = false;
+    std::uint32_t profile = 0, profile_transcript = 0;
+    std::string profile_qualification;
     NetStats stats;
 
     void from_pad(const rcore_pad& pad, rcore_net_row& row) const {
@@ -196,11 +200,95 @@ struct NetSession::Impl {
         out->valid = 1;
     }
     static void publish_unused(rnet_u32, const RNetInputSample*, int, void*) {}
+
+    bool open_wire(const NetParams& p, const RNetProfileCaps* caps, std::string* error) {
+        RNetConfig rc;
+        rnet_config_init_defaults(&rc);
+        rc.slot_count = static_cast<rnet_u8>(p.slots);
+        rc.local_slot = static_cast<rnet_u8>(p.slot);
+        rc.input_delay = static_cast<rnet_u8>(p.delay);
+        rc.session_id = p.session_id;
+        rc.occupied_mask = p.occupied;
+        RNetHostVTable hv{};
+        hv.sample_local = sample_local;
+        hv.publish = publish_unused;
+        hv.ctx = this;
+        session = rnet_session_create(&rc, &hv);
+        if (!session) { if (error) *error = "invalid session configuration"; return false; }
+        if (caps && rnet_session_profiles_begin(session,
+                fnv1a("startup-profiles-v1\n" + profile_qualification), caps) != 0) {
+            if (error) *error = "invalid execution profile offer";
+            return false;
+        }
+        int result;
+        if (p.slot == 0 && p.slots > 2 && !p.via_relay)
+            result = rnet_session_start_lan_hub(session, p.bind.c_str());
+        else
+            result = rnet_session_start_lan(session, p.bind.c_str(), p.peer.c_str());
+        if (result == 0) return true;
+        if (error) *error = "could not open the UDP transport on " + p.bind;
+        return false;
+    }
 };
 
 NetSession::NetSession() : impl_(std::make_unique<Impl>()) {}
 NetSession::~NetSession() { shutdown(); }
 bool NetSession::compiled_in() { return true; }
+
+bool NetSession::prepare(const LoadedCore& core, const NetParams& p,
+                         rcore_init_params& init, std::string* error) {
+    Impl& s = *impl_;
+    auto fail = [&](const std::string& why) { if (error) *error = why; return false; };
+    if (s.session) return fail("execution profile startup was already prepared");
+    if (!RCORE_HAS(core.api, rcore_core_api, execution_profiles) ||
+        !core.api->execution_profiles) return true;
+    const auto* offer = core.api->execution_profiles();
+    if (!offer) return true;
+    if (init.struct_size < sizeof(init) || !(init.flags & RCORE_INIT_NETPLAY))
+        return fail("execution profile agreement requires current netplay init params");
+    if (!(core.info->capabilities & RCORE_CAP_DETERMINISTIC))
+        return fail("the core does not declare DETERMINISTIC");
+    if (p.slots < 2 || p.slots > static_cast<int>(RCORE_MAX_SEATS) ||
+        p.slot < 0 || p.slot >= p.slots) return fail("invalid startup seat");
+    if (offer->struct_size < sizeof(*offer) || !offer->qualification ||
+        !*offer->qualification || !(offer->qualified_profiles & 1u))
+        return fail("the core advertised an invalid execution profile table");
+#if defined(RETRO_RUNNER_NETPLAY_MODULE)
+    if (!net_module_load(p.module_path, error)) return false;
+#endif
+    s.p = p;
+    s.core = &core;
+    s.slot = p.slot;
+    s.slots = p.slots;
+    s.profile_qualification = offer->qualification;
+    RNetProfileCaps caps{offer->cpu_features, offer->backends,
+                         offer->qualified_profiles, offer->architecture};
+    if (!s.open_wire(p, &caps, error)) return false;
+    const auto started = steady_ms();
+    for (;;) {
+        rnet_session_pump(s.session);
+        const int status = rnet_session_profiles_status(s.session, &s.profile,
+                                                       &s.profile_transcript);
+        if (status < 0) return fail("execution profile agreement refused (namespace, offer or acknowledgement differs)");
+        if (status == 1) break;
+        if (rnet_session_peer_disconnected(s.session, 0)) return fail("a peer left during execution profile startup");
+        if (steady_ms() - started > 30000u)
+            return fail("execution profile startup timed out; every occupied peer must support the barrier");
+        rnet_session_wait_recv(s.session, 5);
+    }
+    s.profile_agreed = true;
+    init.flags |= RCORE_INIT_PROFILE_AGREED;
+    init.execution_profile = s.profile;
+    for (int i = 0; i < p.slots; ++i) {
+        RNetProfileCaps peer{};
+        if (rnet_session_profiles_peer(s.session, i, &peer))
+            std::fprintf(stderr, "runner_netplay: CAP seat=%d arch=%u cpu=%08x backends=%08x profiles=%08x\n",
+                         i, peer.architecture, peer.cpu_features, peer.backends, peer.profiles);
+    }
+    std::fprintf(stderr, "runner_netplay: PROFILE %s:%u transcript=%08x (locked before init)\n",
+                 s.profile_qualification.c_str(), s.profile, s.profile_transcript);
+    return true;
+}
 
 bool NetSession::start(const LoadedCore& core, const NetParams& p, std::string* error) {
     auto fail = [&](const std::string& m) {
@@ -209,6 +297,15 @@ bool NetSession::start(const LoadedCore& core, const NetParams& p, std::string* 
     };
     Impl& s = *impl_;
     const rcore_core_api* a = core.api;
+    if (s.drv) return fail("a netplay execution is already active");
+    if (s.profile_agreed && (s.core != &core || s.p.slot != p.slot || s.p.slots != p.slots ||
+        s.p.occupied != p.occupied || s.p.delay != p.delay || s.p.prediction != p.prediction ||
+        s.p.session_id != p.session_id || s.p.bind != p.bind || s.p.peer != p.peer ||
+        s.p.via_relay != p.via_relay || s.p.epoch_s != p.epoch_s))
+        return fail("netplay configuration changed after startup profile agreement");
+    if (!s.profile_agreed && RCORE_HAS(a, rcore_core_api, execution_profiles) &&
+        a->execution_profiles && a->execution_profiles())
+        return fail("execution profiles must be prepared before core init");
 #if defined(RETRO_RUNNER_NETPLAY_MODULE)
     // The netcode is a separate, versioned file: open and check it before any
     // recomp-net call, and say which one a peer-visible log came from.
@@ -271,42 +368,18 @@ bool NetSession::start(const LoadedCore& core, const NetParams& p, std::string* 
         content_fp = fnv1a(l + "\n", content_fp);
         std::fprintf(stderr, "runner_netplay: IDENT content %s\n", l.c_str());
     }
+    if (s.profile_agreed) {
+        const std::string row = "execution_profile " + s.profile_qualification + ":" +
+            std::to_string(s.profile) + " transcript " + std::to_string(s.profile_transcript);
+        content_fp = fnv1a(row + "\n", content_fp);
+        std::fprintf(stderr, "runner_netplay: IDENT content %s\n", row.c_str());
+    }
     std::fprintf(stderr, "runner_netplay: IDENT build=%08x content=%08x\n", build_fp, content_fp);
 
     // ---- the wire ----
-    RNetConfig rc;
-    rnet_config_init_defaults(&rc);
-    rc.slot_count = static_cast<rnet_u8>(p.slots);
-    rc.local_slot = static_cast<rnet_u8>(p.slot);
-    rc.input_delay = static_cast<rnet_u8>(p.delay);
-    rc.session_id = p.session_id;
-    rc.occupied_mask = p.occupied;
-    RNetHostVTable hv{};
-    hv.sample_local = Impl::sample_local;
-    hv.publish = Impl::publish_unused;
-    hv.ctx = &s;
-    s.session = rnet_session_create(&rc, &hv);
-    if (!s.session) return fail("recomp-net refused the session configuration");
-    int rc_start;
-    std::string how;
-    if (p.via_relay) {
-        rc_start = rnet_session_start_lan(s.session, p.bind.c_str(), p.peer.c_str());
-        how = "via the relay " + p.peer;
-    } else if (p.slot == 0 && p.slots > 2) {
-        rc_start = rnet_session_start_lan_hub(s.session, p.bind.c_str());
-        how = "host, relaying for " + std::to_string(p.slots - 1) + " guests on " + p.bind;
-    } else if (p.slot == 0) {
-        rc_start = rnet_session_start_lan(s.session, p.bind.c_str(), "");
-        how = "host on " + p.bind;
-    } else {
-        rc_start = rnet_session_start_lan(s.session, p.bind.c_str(), p.peer.c_str());
-        how = "guest, dialling the host " + p.peer;
-    }
-    if (rc_start != 0) {
-        rnet_session_destroy(s.session);
-        s.session = nullptr;
-        return fail("could not open the UDP transport (" + how + ")");
-    }
+    if (!s.session && !s.open_wire(p, nullptr, error)) return false;
+    const std::string how = p.via_relay ? "via relay " + p.peer :
+        p.slot == 0 ? "host on " + p.bind : "guest to " + p.peer;
 
     // ---- the driver ----
     s.drv = rnet_rb_driver_create();
@@ -385,6 +458,15 @@ NetSession::Admit NetSession::poll() {
     Impl& s = *impl_;
     if (!s.session || !s.drv || !s.ended.empty()) return Admit::Stall;
     rnet_session_pump(s.session);
+    if (s.profile_agreed && rnet_session_profiles_status(s.session, nullptr, nullptr) != 1) {
+        s.ended = "execution profile agreement violated; live switching is forbidden";
+        return Admit::Stall;
+    }
+    // Drain received control first: a final QUIESCE acknowledgement and BYE
+    // can arrive in one pump. The driver can finish an already agreed stop
+    // with the wire down; reporting BYE first turned that into a false error.
+    const auto admitted = rnet_rb_driver_poll_admit(s.drv);
+    if (drained()) return Admit::Stall;
     const bool running = rnet_session_is_running(s.session) != 0;
     if (running) s.was_running = true;
     if (!running && !s.was_running && steady_ms() - s.started_ms > 30000) {
@@ -400,7 +482,7 @@ NetSession::Admit NetSession::poll() {
         s.ended = "a player left the match (no packets for 5 s)";
         return Admit::Stall;
     }
-    switch (rnet_rb_driver_poll_admit(s.drv)) {
+    switch (admitted) {
     case RNET_RB_ADMIT_LIVE: return Admit::Live;
     case RNET_RB_ADMIT_REPLAY: return Admit::Replay;
     default: ++s.stats.stalls; return Admit::Stall;
@@ -472,6 +554,10 @@ struct NetSession::Impl {
 NetSession::NetSession() : impl_(std::make_unique<Impl>()) {}
 NetSession::~NetSession() = default;
 bool NetSession::compiled_in() { return false; }
+bool NetSession::prepare(const LoadedCore&, const NetParams&, rcore_init_params&, std::string* error) {
+    if (error) *error = "this runner was built without recomp-net";
+    return false;
+}
 bool NetSession::start(const LoadedCore&, const NetParams&, std::string* error) {
     if (error) *error = "this runner was built without recomp-net (RETRO_RUNTIME_RECOMP_NET_DIR)";
     return false;

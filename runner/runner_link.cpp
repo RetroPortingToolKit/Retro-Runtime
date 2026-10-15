@@ -321,6 +321,8 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
     ip.flags = (a.strict ? RCORE_INIT_STRICT : 0u) | (a.netplay ? RCORE_INIT_NETPLAY : 0u);
     ip.cache_dir = cache.c_str();
     NetSession ns;
+    if (a.netplay && !ns.prepare(core, a.net, ip, &err))
+        return exiting(sock, 2, "netplay: " + err);
     std::uint64_t net_tick = 0;
     if (a.netplay) {
         session.set_input_source([&](std::uint32_t seat, rcore_pad& pad) { pad = ns.seat_pad(seat); });

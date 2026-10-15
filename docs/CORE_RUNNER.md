@@ -252,6 +252,20 @@ values and 16 inputs, every record with its field count.
 
 ## Netplay (headless, 2026-09-29)
 
+**Startup execution profiles (2026-10-14, rcore draft 10).** A core with
+`execution_profiles()` advertises actual CPU/backend capabilities and
+qualified profiles before init. The runner completes recomp-net's immutable
+startup offer/ACK barrier before init/load, supplies the agreed bit index
+with `RCORE_INIT_PROFILE_AGREED`, and appends the common profile and canonical
+capability transcript to existing identity. Every occupied seat must agree;
+missing legacy support times out, never silently downgrades. No per-frame
+capability probing, HLE/LLE handoff, live renegotiation or UI is added. Old
+cores retain their startup behavior; old runners leave the new core's safe
+default in force. A core/package/build check is never removed by this feature.
+Requires recomp-net's startup_profiles.h API (module ABI minor 1 for module
+builds). The generic fixture tests the real UDP barrier and clean one-peer
+stop; native CPU qualification remains the engine's responsibility.
+
 `runner/net_session.*` binds recomp-net's `rb_driver` once, for every core
 (rev 4; the core's slots map onto `RNetRbHost` as CORE_ABI.md §Netplay
 tables). Built when CMake is given `-DRETRO_RUNTIME_RECOMP_NET_DIR=<recomp-net

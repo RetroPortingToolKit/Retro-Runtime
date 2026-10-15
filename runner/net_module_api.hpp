@@ -6,6 +6,7 @@
 extern "C" {
 #include "recomp_net/rb_driver.h"
 #include "recomp_net/session.h"
+#include "recomp_net/startup_profiles.h"
 }
 
 #define RETRO_NET_MODULE_SYMBOLS(X)  \
@@ -28,6 +29,9 @@ extern "C" {
     X(rnet_session_is_running)       \
     X(rnet_session_peer_disconnected) \
     X(rnet_session_pump)             \
+    X(rnet_session_profiles_begin)   \
+    X(rnet_session_profiles_status)  \
+    X(rnet_session_profiles_peer)    \
     X(rnet_session_send_bye)         \
     X(rnet_session_start_lan)        \
     X(rnet_session_start_lan_hub)    \
