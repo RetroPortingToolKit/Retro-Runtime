@@ -127,6 +127,10 @@ if(RETRO_RUNTIME_TOOLS)
     # runner/net_module.hpp), so it updates without a new runner. The checkout
     # then supplies headers only.
     option(RETRO_RUNTIME_NETPLAY_MODULE "retro-core-runner: netplay through a loadable module" OFF)
+    if(RETRO_RUNTIME_RECOMP_NET_DIR AND NOT EXISTS
+        "${RETRO_RUNTIME_RECOMP_NET_DIR}/include/recomp_net/startup_profiles.h")
+        message(FATAL_ERROR "Netplay requires recomp-net's startup_profiles.h API (module ABI minor 1); update RETRO_RUNTIME_RECOMP_NET_DIR")
+    endif()
     if(RETRO_RUNTIME_NETPLAY_MODULE)
         if(NOT RETRO_RUNTIME_RECOMP_NET_DIR OR NOT EXISTS "${RETRO_RUNTIME_RECOMP_NET_DIR}/include/recomp_net/module.h")
             message(FATAL_ERROR "RETRO_RUNTIME_NETPLAY_MODULE needs RETRO_RUNTIME_RECOMP_NET_DIR with include/recomp_net/module.h")
@@ -143,6 +147,24 @@ if(RETRO_RUNTIME_TOOLS)
         target_link_libraries(retro-core-runner PRIVATE recomp_net)
         target_compile_definitions(retro-core-runner PRIVATE RETRO_RUNNER_NETPLAY=1)
         message(STATUS "retro-core-runner: netplay from ${RETRO_RUNTIME_RECOMP_NET_DIR}")
+    endif()
+    set(RETRO_RUNTIME_TEST_NETPLAY_MODULE "" CACHE FILEPATH
+        "Optional built recomp-net module for the startup negotiation integration test")
+    if(RETRO_RUNTIME_RECOMP_NET_DIR AND
+       (NOT RETRO_RUNTIME_NETPLAY_MODULE OR RETRO_RUNTIME_TEST_NETPLAY_MODULE))
+        add_executable(retro-net-profiles-test tests/net_profiles_test.cpp
+            runner/net_session.cpp runner/net_module.cpp)
+        target_include_directories(retro-net-profiles-test PRIVATE ${RETRO_RUNTIME_RECOMP_NET_DIR}/include)
+        target_compile_definitions(retro-net-profiles-test PRIVATE RETRO_RUNNER_NETPLAY=1)
+        target_link_libraries(retro-net-profiles-test PRIVATE retro_core_support Threads::Threads)
+        if(RETRO_RUNTIME_NETPLAY_MODULE)
+            target_compile_definitions(retro-net-profiles-test PRIVATE RETRO_RUNNER_NETPLAY_MODULE=1)
+            target_link_libraries(retro-net-profiles-test PRIVATE ${CMAKE_DL_LIBS})
+            add_test(NAME runner_startup_profiles COMMAND retro-net-profiles-test ${RETRO_RUNTIME_TEST_NETPLAY_MODULE})
+        else()
+            target_link_libraries(retro-net-profiles-test PRIVATE recomp_net)
+            add_test(NAME runner_startup_profiles COMMAND retro-net-profiles-test)
+        endif()
     endif()
     # Threads: the savestate keeper hashes content off the core thread.
     find_package(Threads REQUIRED)

@@ -713,6 +713,7 @@ int main(int argc, char** argv) {
     ip.system_dir = nullptr;
     ip.cache_dir = cache.c_str();
     NetSession ns;
+    if (netplay && !ns.prepare(core, net, ip, &err)) die("netplay: " + err);
     std::uint64_t net_tick = 0;
     if (netplay) {
         // Settled before the core runs: rows from the session, the clock from

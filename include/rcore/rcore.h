@@ -48,7 +48,7 @@ extern "C" {
 
 #define RCORE_ABI_MAJOR 0u /* 0 = draft; the first implemented contract is 1 */
 #define RCORE_ABI_MINOR 0u
-#define RCORE_DRAFT_REVISION 9u /* draft-only counter; see docs/CORE_ABI.md */
+#define RCORE_DRAFT_REVISION 10u /* draft-only counter; see docs/CORE_ABI.md */
 
 #if defined(_WIN32)
 #  define RCORE_EXPORT __declspec(dllexport)
@@ -432,12 +432,33 @@ typedef struct rcore_host_api {
 #define RCORE_INIT_NETPLAY         (1u << 1) /* requires CAP_DETERMINISTIC. Rollback sessions
                                                 also require CAP_ROLLBACK; otherwise the
                                                 session is delay-based lockstep. */
+#define RCORE_INIT_PROFILE_AGREED  (1u << 2) /* rev 10: startup profile barrier completed */
+
+/* Rev 10. Query before init, no guest/worker creation. The versioned namespace
+ * defines validated semantics and ranking of profile bits; bit 0 is portable,
+ * highest common bit wins. CPU/backends are actual available capabilities,
+ * not OS-version guesses. A profile advertisement is NOT cross-build proof:
+ * the runner keeps its existing core/package/content identity checks. */
+typedef struct rcore_execution_profiles {
+    uint32_t struct_size;
+    uint32_t architecture; /* diagnostic, 0..255; namespace defines values */
+    uint32_t cpu_features;
+    uint32_t backends;
+    uint32_t qualified_profiles;
+    uint32_t _pad0;
+    const char* qualification; /* nonempty, core-owned, immutable until deinit */
+} rcore_execution_profiles;
 
 typedef struct rcore_init_params {
     uint32_t struct_size;
     uint32_t flags;               /* RCORE_INIT_* */
     const char* system_dir;       /* firmware / BIOS the host verified; read-only */
     const char* cache_dir;        /* core-private, writable, may be wiped */
+    /* Rev 10: valid only with INIT_PROFILE_AGREED. A bit INDEX from the core's
+     * advertised qualified_profiles. Validate and apply BEFORE guest boot;
+     * never reselect on reset, save load or rollback. No HLE/LLE live switch. */
+    uint32_t execution_profile;
+    uint32_t _pad0;
 } rcore_init_params;
 
 typedef struct rcore_load_params {
@@ -564,6 +585,10 @@ typedef struct rcore_core_api {
      * row. Both are pure. NULL = the runner's generic packing (see rev 4). */
     void (*net_row_from_pad)(const rcore_pad* pad, rcore_net_row* row);
     void (*net_row_to_pad)(const rcore_net_row* row, rcore_pad* pad);
+    /* --- appended in draft revision 10: fixed execution startup profiles ---
+     * Optional. NULL = legacy startup policy, no profile negotiation. An old
+     * runner omits PROFILE_AGREED and the core keeps its safe default. */
+    const rcore_execution_profiles* (*execution_profiles)(void);
 } rcore_core_api;
 
 /* The single exported symbol. Returns NULL when the core cannot serve
