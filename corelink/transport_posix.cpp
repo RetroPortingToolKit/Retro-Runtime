@@ -90,6 +90,10 @@ void close_handle(NativeHandle h) {
     if (h >= 0) ::close(h);
 }
 
+NativeHandle retain_handle(NativeHandle h) {
+    return h == kNoHandle ? kNoHandle : ::fcntl(h, F_DUPFD_CLOEXEC, 0);
+}
+
 // ---- memory -------------------------------------------------------------------
 
 bool create_shared(std::size_t size, const char* name, SharedMemory& out, std::string* error) {

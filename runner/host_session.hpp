@@ -36,6 +36,14 @@ public:
     // its bytes, copied before this returns. Stderr headless, the hub over the
     // link. May arrive at any point of a frame.
     virtual void accessory_notify(std::uint32_t, std::uint32_t, const void*, std::size_t) {}
+    virtual bool gpu_capabilities(rcore_gpu_capabilities&) { return false; }
+    virtual bool gpu_register(const rcore_gpu_ring&) { return false; }
+    virtual std::uint32_t gpu_released(std::uint64_t, std::uint32_t& released) {
+        released = 0;
+        return RCORE_GPU_RING_REFUSED;
+    }
+    virtual bool gpu_frame(const rcore_gpu_frame&) { return false; }
+    virtual void gpu_unregister(std::uint64_t) {}
 };
 
 struct SaveRegion {
@@ -67,6 +75,10 @@ public:
         gl_proc_ = proc;
         host_.gl_get_proc_address = proc ? h_gl_proc : nullptr;
     }
+
+    // After link negotiation, before init. Import support/adapter identity is
+    // sampled once; callbacks stay absent for CPU-only sinks and older hubs.
+    void offer_gpu_frames();
 
     // The host table the core is given. Stable for the session's lifetime.
     const rcore_host_api* host_api() const { return &host_; }
@@ -120,6 +132,13 @@ public:
     }
 
 private:
+    rcore_gpu_capabilities gpu_caps_{};
+    bool gpu_offered_ = false;
+    static std::uint32_t h_gpu_caps(void*, rcore_gpu_capabilities*);
+    static std::uint32_t h_gpu_register(void*, const rcore_gpu_ring*);
+    static std::uint32_t h_gpu_released(void*, std::uint64_t, std::uint32_t*);
+    static std::uint32_t h_gpu_frame(void*, const rcore_gpu_frame*);
+    static void h_gpu_unregister(void*, std::uint64_t);
     static HostSession* self(void* ctx) { return static_cast<HostSession*>(ctx); }
 
     static void h_log(void*, std::uint32_t, const char*);

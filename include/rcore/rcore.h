@@ -48,7 +48,7 @@ extern "C" {
 
 #define RCORE_ABI_MAJOR 0u /* 0 = draft; the first implemented contract is 1 */
 #define RCORE_ABI_MINOR 0u
-#define RCORE_DRAFT_REVISION 10u /* draft-only counter; see docs/CORE_ABI.md */
+#define RCORE_DRAFT_REVISION 11u /* draft-only counter; see docs/CORE_ABI.md */
 
 #if defined(_WIN32)
 #  define RCORE_EXPORT __declspec(dllexport)
@@ -91,6 +91,7 @@ typedef int32_t rcore_result;
 #define RCORE_CAP_GL_COMPUTE       (1ull << 9) /* wants a lent GL 4.3+ context (gl_get_proc_address);
                                                   must still run, in software, when none is lent */
 #define RCORE_CAP_ACCESSORY_DATA   (1ull << 10) /* accessory_poll / accessory_notify (rev 7) */
+#define RCORE_CAP_GPU_FRAMES       (1ull << 11) /* optional shared images; CPU frames remain supported */
 
 typedef struct rcore_core_info {
     uint32_t struct_size;
@@ -136,6 +137,71 @@ typedef struct rcore_frame {
      * never for netplay. */
     uint64_t game_frame;
 } rcore_frame;
+
+/* Rev 11: a core-owned export ring, optional on both sides. Capabilities are
+ * sampled once before load; release notifications below concern resource
+ * ownership, never a simulation profile or a capability renegotiation.
+ * Initially only Windows opaque NT memory/binary semaphore handles are named.
+ * Unsupported platforms/backends keep video_submit, including per-field
+ * declines. No process-local GL texture name crosses this interface. */
+#define RCORE_GPU_MAX_IMAGES 3u
+#define RCORE_GPU_HANDLE_WIN32_NT (1u << 0)
+#define RCORE_GPU_SYNC_BINARY (1u << 0)
+#define RCORE_GPU_FORMAT_RGBA8 1u
+#define RCORE_GPU_ORIGIN_TOP_LEFT (1u << 0)
+#define RCORE_GPU_RING_PENDING 1u
+#define RCORE_GPU_RING_READY 2u
+#define RCORE_GPU_RING_REFUSED 3u
+#define RCORE_GPU_RING_RETIRED 4u
+
+typedef struct rcore_gpu_capabilities {
+    uint32_t struct_size;
+    uint32_t handle_types;
+    uint32_t sync_types;
+    uint32_t max_images;
+    uint8_t device_uuid[16];
+    uint8_t device_luid[8];
+    uint32_t device_node_mask;
+    uint32_t max_width;
+    uint32_t max_height;
+    uint32_t _pad0;
+} rcore_gpu_capabilities;
+
+typedef struct rcore_gpu_image {
+    uint32_t struct_size;
+    uint32_t _pad0;
+    uint64_t memory_handle;
+    uint64_t allocation_size;
+    uint64_t ready_semaphore;
+    uint64_t release_semaphore;
+} rcore_gpu_image;
+
+typedef struct rcore_gpu_ring {
+    uint32_t struct_size;
+    uint32_t handle_type;
+    uint32_t sync_type;
+    uint32_t pixel_format;
+    uint32_t width;
+    uint32_t height;
+    uint32_t image_count;
+    uint32_t flags;
+    uint64_t generation;
+    uint8_t device_uuid[16];
+    uint8_t device_luid[8];
+    uint32_t device_node_mask;
+    uint32_t _pad0;
+    rcore_gpu_image images[RCORE_GPU_MAX_IMAGES];
+} rcore_gpu_ring;
+
+typedef struct rcore_gpu_frame {
+    uint32_t struct_size;
+    uint32_t image_index;
+    uint64_t generation;
+    uint32_t aspect_num;
+    uint32_t aspect_den;
+    uint64_t frame_number;
+    uint64_t game_frame;
+} rcore_gpu_frame;
 
 /* ------------------------------------------------------------------------ */
 /* Input — the host sends a generic pad; the core maps it to its device.     */
@@ -422,6 +488,34 @@ typedef struct rcore_host_api {
      * a granted frame, including its resim calls. Presentation policy only;
      * never guest input, session identity, or serialized simulation state. */
     uint32_t (*presentation_size)(void* host_ctx, uint32_t* width, uint32_t* height);
+    /* --- appended in draft revision 11: optional shared GPU images --- */
+    /* All five slots must exist, with non-NULL functions, to offer GPU frames.
+     * Capabilities return 1 with actual adapter identity/import support, or 0.
+     * Query once at setup. The caller sets out->struct_size. */
+    uint32_t (*gpu_frames_capabilities)(void* host_ctx, rcore_gpu_capabilities* out);
+    /* Nonzero = registration queued. The host takes its own handle references
+     * and copies metadata BEFORE returning; caller retains its handles. The
+     * generation is nonzero, never reused in a session. Exact adapter/format,
+     * dimensions, structure sizes and handle counts must be validated. */
+    uint32_t (*gpu_frames_register)(void* host_ctx, const rcore_gpu_ring* ring);
+    /* Resource events only: state plus a CONSUMED delta of released image bits.
+     * READY first releases all images. A submitted image cannot be reused
+     * until released again. Release acknowledges completed host GPU work,
+     * including its release semaphore signal; CPU polling never blocks.
+     * A pending/full/refused ring uses CPU frames for that field. */
+    uint32_t (*gpu_frames_released)(void* host_ctx, uint64_t generation, uint32_t* released);
+    /* The producer completes the ready signal BEFORE this call: merely
+     * queueing it is insufficient if the producer dies before it executes.
+     * Consumer still waits on GPU for memory coherence, samples,
+     * then signals release semaphore. Nonzero accepts this field; zero means
+     * no image was accepted, so use CPU output and retire the failed ring.
+     * Never emit both accepted GPU output and CPU output for one field. */
+    uint32_t (*video_submit_gpu)(void* host_ctx, const rcore_gpu_frame* frame);
+    /* Asynchronous retirement: stop using the ring, preserving the last image
+     * if needed, then report RETIRED. Older generations' messages cannot affect
+     * the replacement ring. The core keeps memory alive until retirement,
+     * except unload: the host's independent handle references outlive it. */
+    void (*gpu_frames_unregister)(void* host_ctx, uint64_t generation);
 } rcore_host_api;
 
 /* ------------------------------------------------------------------------ */

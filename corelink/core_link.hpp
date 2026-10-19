@@ -15,6 +15,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace retro::corelink {
@@ -32,6 +33,7 @@ struct LaunchSpec {
     fs::path session_dir;  // runner.log, core.log, events.tsv, the core's cache
     bool gl = true;
     bool strict = false;
+    rcore_gpu_capabilities gpu_capabilities{}; // actual local import support, sampled once
     std::map<std::string, std::string> options;
     std::optional<fs::path> load_state;
     // Seat N's Transfer Pak cartridge (argv --tpakN-rom), N = 1-4; empty for
@@ -95,6 +97,30 @@ struct LinkEvent {
     std::string detail;
 };
 
+struct GpuEvent {
+    enum class Kind { Register, Frame, Unregister } kind = Kind::Register;
+    rcore_gpu_ring ring{};
+    rcore_gpu_frame frame{};
+    std::uint64_t generation = 0;
+    std::vector<NativeHandle> handles;
+    GpuEvent() = default;
+    GpuEvent(const GpuEvent&) = delete;
+    GpuEvent& operator=(const GpuEvent&) = delete;
+    GpuEvent(GpuEvent&& other) noexcept
+        : kind(other.kind), ring(other.ring), frame(other.frame),
+          generation(other.generation), handles(std::move(other.handles)) { other.handles.clear(); }
+    GpuEvent& operator=(GpuEvent&& other) noexcept {
+        if (this != &other) {
+            for (auto h : handles) close_handle(h);
+            kind = other.kind; ring = other.ring; frame = other.frame;
+            generation = other.generation; handles = std::move(other.handles);
+            other.handles.clear();
+        }
+        return *this;
+    }
+    ~GpuEvent() { for (auto h : handles) close_handle(h); }
+};
+
 enum class LinkState {
     Idle,     // not started
     Starting, // spawned; identity, load and saves in progress
@@ -143,7 +169,7 @@ public:
     // CAP_SAVESTATE, a grant or another request still outstanding.
     bool states_supported() const;
     bool can_request_state() const { return states_supported() && can_grant(); }
-    bool request_save_state(const fs::path& path);
+    bool request_save_state(const fs::path& path, const std::vector<std::uint8_t>& thumbnail = {});
     bool request_load_state(const fs::path& path);
     bool state_pending() const { return state_pending_; }
     // The answer, once, when it has arrived. A runner that ends first
@@ -168,6 +194,9 @@ public:
     // The picture last taken (nullptr before the first one).
     const FrameInfo* frame_info() const;
     const std::uint8_t* frame_pixels() const;
+    std::optional<GpuEvent> poll_gpu_event();
+    bool gpu_status(std::uint64_t generation, std::uint32_t state, std::uint32_t released,
+                    const std::array<std::uint64_t, RCORE_GPU_MAX_IMAGES>& frames = {});
 
     std::uint32_t audio_rate() const;
     // The core's stated frame rate; false while it has stated none.
@@ -223,6 +252,7 @@ private:
     StateResult state_request_;
     std::optional<StateResult> state_result_;
     std::deque<AccessoryNotify> notifies_;
+    std::deque<GpuEvent> gpu_events_;
     int exit_code_ = 0;
     std::string exit_reason_;
 };

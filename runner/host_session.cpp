@@ -32,6 +32,82 @@ HostSession::HostSession(const LoadedCore& core, Sink& sink) : core_(core), sink
     host_.presentation_size = h_presentation_size;
 }
 
+void HostSession::offer_gpu_frames() {
+    if (gpu_offered_) return;
+    gpu_offered_ = true;
+    gpu_caps_ = {};
+    gpu_caps_.struct_size = sizeof gpu_caps_;
+    if (!sink_.gpu_capabilities(gpu_caps_) || gpu_caps_.struct_size < sizeof gpu_caps_ ||
+        !gpu_caps_.handle_types ||
+        !gpu_caps_.sync_types || !gpu_caps_.max_images ||
+        gpu_caps_.max_images > RCORE_GPU_MAX_IMAGES || !gpu_caps_.max_width ||
+        !gpu_caps_.max_height) return;
+    host_.gpu_frames_capabilities = h_gpu_caps;
+    host_.gpu_frames_register = h_gpu_register;
+    host_.gpu_frames_released = h_gpu_released;
+    host_.video_submit_gpu = h_gpu_frame;
+    host_.gpu_frames_unregister = h_gpu_unregister;
+}
+
+std::uint32_t HostSession::h_gpu_caps(void* ctx, rcore_gpu_capabilities* out) {
+    if (!out || out->struct_size < sizeof *out) return 0;
+    *out = self(ctx)->gpu_caps_;
+    return 1;
+}
+
+std::uint32_t HostSession::h_gpu_register(void* ctx, const rcore_gpu_ring* ring) {
+    auto* s = self(ctx);
+    if (!ring || ring->struct_size < sizeof *ring || !ring->generation ||
+        ring->handle_type != RCORE_GPU_HANDLE_WIN32_NT ||
+        ring->sync_type != RCORE_GPU_SYNC_BINARY ||
+        ring->pixel_format != RCORE_GPU_FORMAT_RGBA8 ||
+        ring->flags != RCORE_GPU_ORIGIN_TOP_LEFT ||
+        !(s->gpu_caps_.handle_types & ring->handle_type) ||
+        !(s->gpu_caps_.sync_types & ring->sync_type) ||
+        !ring->width || !ring->height || ring->width > s->gpu_caps_.max_width ||
+        ring->height > s->gpu_caps_.max_height || !ring->image_count ||
+        ring->image_count > s->gpu_caps_.max_images ||
+        std::memcmp(ring->device_luid, s->gpu_caps_.device_luid, 8) ||
+        std::memcmp(ring->device_uuid, s->gpu_caps_.device_uuid, 16) ||
+        ring->device_node_mask != s->gpu_caps_.device_node_mask) return 0;
+    const std::uint64_t pixels = std::uint64_t(ring->width) * ring->height;
+    if (pixels > UINT64_MAX / 4) return 0;
+    for (std::uint32_t i = 0; i < ring->image_count; ++i) {
+        const auto& image = ring->images[i];
+        if (image.struct_size < sizeof image || !image.memory_handle ||
+            !image.ready_semaphore || !image.release_semaphore ||
+            image.ready_semaphore == image.release_semaphore ||
+            image.allocation_size < pixels * 4) return 0;
+        for (std::uint32_t j = 0; j < i; ++j) {
+            const auto& prior = ring->images[j];
+            if (image.memory_handle == prior.memory_handle ||
+                image.ready_semaphore == prior.ready_semaphore ||
+                image.ready_semaphore == prior.release_semaphore ||
+                image.release_semaphore == prior.ready_semaphore ||
+                image.release_semaphore == prior.release_semaphore) return 0;
+        }
+    }
+    return s->sink_.gpu_register(*ring) ? 1u : 0u;
+}
+
+std::uint32_t HostSession::h_gpu_released(void* ctx, std::uint64_t generation,
+                                       std::uint32_t* released) {
+    if (!released) return RCORE_GPU_RING_REFUSED;
+    *released = 0;
+    if (!generation) return RCORE_GPU_RING_REFUSED;
+    return self(ctx)->sink_.gpu_released(generation, *released);
+}
+
+std::uint32_t HostSession::h_gpu_frame(void* ctx, const rcore_gpu_frame* frame) {
+    if (!frame || frame->struct_size < sizeof *frame || !frame->generation ||
+        frame->image_index >= RCORE_GPU_MAX_IMAGES) return 0;
+    return self(ctx)->sink_.gpu_frame(*frame) ? 1u : 0u;
+}
+
+void HostSession::h_gpu_unregister(void* ctx, std::uint64_t generation) {
+    if (generation) self(ctx)->sink_.gpu_unregister(generation);
+}
+
 std::uint32_t HostSession::h_presentation_size(void* ctx, std::uint32_t* width, std::uint32_t* height) {
     const auto* s = self(ctx);
     if (width) *width = s->presentation_width_;

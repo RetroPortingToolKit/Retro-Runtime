@@ -104,6 +104,10 @@ namespace {
 constexpr std::uint32_t kScriptCLeft = 1u << 28, kScriptCRight = 1u << 29, kScriptCUp = 1u << 30,
                         kScriptCDown = 1u << 31;
 constexpr std::uint32_t kScriptStick = kScriptCLeft | kScriptCRight | kScriptCUp | kScriptCDown;
+// Scripted directions drive the left analog stick; C directions drive the right.
+constexpr std::uint32_t kScriptLeft = 1u << 20, kScriptRight = 1u << 21,
+                        kScriptUp = 1u << 22, kScriptDown = 1u << 23;
+constexpr std::uint32_t kScriptLeftStick = kScriptLeft | kScriptRight | kScriptUp | kScriptDown;
 
 std::uint32_t script_buttons(const std::string& s) {
     std::uint32_t b = 0;
@@ -123,6 +127,10 @@ std::uint32_t script_buttons(const std::string& s) {
         else if (tok == "ddown") b |= RCORE_PAD_DPAD_DOWN;
         else if (tok == "dleft") b |= RCORE_PAD_DPAD_LEFT;
         else if (tok == "dright") b |= RCORE_PAD_DPAD_RIGHT;
+        else if (tok == "left") b |= kScriptLeft;
+        else if (tok == "right") b |= kScriptRight;
+        else if (tok == "up") b |= kScriptUp;
+        else if (tok == "down") b |= kScriptDown;
         else if (tok == "cleft") b |= kScriptCLeft;
         else if (tok == "cright") b |= kScriptCRight;
         else if (tok == "cup") b |= kScriptCUp;
@@ -203,7 +211,9 @@ public:
         for (const auto& [at, buttons] : script_) {
             if (at <= *frame_) held = buttons;
         }
-        pad.buttons = held & ~kScriptStick;
+        pad.buttons = held & ~(kScriptStick | kScriptLeftStick);
+        pad.axes[RCORE_AXIS_LX] = (held & kScriptLeft) ? -32767 : (held & kScriptRight) ? 32767 : 0;
+        pad.axes[RCORE_AXIS_LY] = (held & kScriptUp) ? 32767 : (held & kScriptDown) ? -32767 : 0;
         pad.axes[RCORE_AXIS_RX] = (held & kScriptCLeft) ? -32767 : (held & kScriptCRight) ? 32767 : 0;
         pad.axes[RCORE_AXIS_RY] = (held & kScriptCUp) ? 32767 : (held & kScriptCDown) ? -32767 : 0;
     }
@@ -805,7 +815,7 @@ int main(int argc, char** argv) {
             // The local pad for the next frames: the script, on seat 0's terms.
             rcore_pad local{};
             local.struct_size = sizeof local;
-            frame = live + 1;
+            frame = static_cast<std::uint64_t>(ns.tick()) + 1;
             sink.input(0, local);
             ns.stage_local(local);
             const NetSession::Admit a = ns.poll();
@@ -831,15 +841,26 @@ int main(int argc, char** argv) {
             }
             ns.finish(a);
             if (core.api->state_hash) tick_hash[ns.tick()] = core.api->state_hash();
-            if (a == NetSession::Admit::Live && ++live >= target && !quiescing) {
-                ns.request_quiesce();
-                quiescing = true;
+            if (a == NetSession::Admit::Live) {
+                ++live;
+                // Count completed simulation ticks; live admissions can repeat
+                // ticks discarded by a rollback and overstate actual progress.
+                if (ns.tick() >= target && !quiescing) {
+                    ns.request_quiesce();
+                    quiescing = true;
+                }
             }
             if (ns.drained()) break;
         }
         const double secs =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         const NetStats st = ns.stats();
+        {
+            std::ofstream hashes(out / "confirmed-hashes.tsv");
+            for (const auto& [tick, hash] : tick_hash) {
+                if (tick <= st.confirmed_through) hashes << tick << '\t' << std::hex << hash << std::dec << '\n';
+            }
+        }
         // A frame both peers ran and the digest chain confirmed.
         const std::uint32_t at_tick = target > 20 ? static_cast<std::uint32_t>(target - 20) : 0;
         const auto hit = tick_hash.find(at_tick);

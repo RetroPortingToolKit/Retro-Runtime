@@ -13,6 +13,13 @@ protocol is the same on all three.
 
 ## Transport
 
+**2.4 (2026-10-19):** optional GPU ring/frame/retirement messages 10–12,
+startup capabilities 70, ownership status 71 and explicit save thumbnail 72.
+The existing shared frame-region layout is unchanged. These messages require
+minor 4; old peers retain CPU frames. Native handles travel through the
+platform transport rather than as raw integers. See
+[GPU_FRAMES.md](GPU_FRAMES.md) for setup, lifetime, completion and fallback.
+
 | Channel | What | Owner |
 |---|---|---|
 | control | `SOCK_SEQPACKET` socketpair, one message per packet; the runner's end at fd 3 | — |

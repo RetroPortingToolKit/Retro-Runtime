@@ -37,6 +37,7 @@ constexpr CapName kCaps[] = {
     {RCORE_CAP_ACCESSORY_HOTPLUG, "accessory_hotplug"},
     {RCORE_CAP_GL_COMPUTE, "gl_compute"},
     {RCORE_CAP_ACCESSORY_DATA, "accessory_data"},
+    {RCORE_CAP_GPU_FRAMES, "gpu_frames"},
 };
 
 } // namespace

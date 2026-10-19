@@ -119,6 +119,66 @@ void CoreLink::handle_packet(const std::vector<unsigned char>& buf,
             identity_.draft_revision = m.draft_revision;
             identity_.engine_dirty = m.engine_dirty != 0;
             identity_.protocol_minor = std::min(m.protocol_minor, kProtocolMinor);
+            if (link_has_gpu_frames(identity_.protocol_minor)) {
+                GpuCapabilitiesMsg caps{};
+                caps.h.type = Msg::GpuCapabilities;
+                caps.caps = spec_.gpu_capabilities;
+                caps.caps.struct_size = sizeof caps.caps;
+                send_msg(channel_, caps);
+            }
+            break;
+        }
+        case Msg::GpuRing: {
+            GpuRingMsg m{};
+            if (!link_has_gpu_frames(identity_.protocol_minor) || !as_msg(buf, m) ||
+                m.ring.struct_size < sizeof m.ring || !m.ring.generation ||
+                !m.ring.image_count || m.ring.image_count > RCORE_GPU_MAX_IMAGES ||
+                handles.size() != m.ring.image_count * 3u || gpu_events_.size() >= 32) {
+                exit_reason_ = "link: malformed GPU ring";
+                stop(0);
+                return;
+            }
+            GpuEvent event;
+            event.kind = GpuEvent::Kind::Register;
+            event.ring = m.ring;
+            event.generation = m.ring.generation;
+            event.handles.swap(handles);
+            gpu_events_.push_back(std::move(event));
+            break;
+        }
+        case Msg::GpuFrame: {
+            GpuFrameMsg m{};
+            if (!link_has_gpu_frames(identity_.protocol_minor) || !as_msg(buf, m) ||
+                m.frame.struct_size < sizeof m.frame || !m.frame.generation ||
+                !m.frame.frame_number || m.frame.frame_number > granted_ || !handles.empty() ||
+                m.frame.image_index >= RCORE_GPU_MAX_IMAGES || gpu_events_.size() >= 32) {
+                exit_reason_ = "link: malformed GPU frame";
+                stop(0);
+                return;
+            }
+            {
+                GpuEvent event;
+                event.kind = GpuEvent::Kind::Frame;
+                event.frame = m.frame;
+                event.generation = m.frame.generation;
+                gpu_events_.push_back(std::move(event));
+            }
+            break;
+        }
+        case Msg::GpuUnregister: {
+            GpuUnregisterMsg m{};
+            if (!link_has_gpu_frames(identity_.protocol_minor) || !as_msg(buf, m) ||
+                !m.generation || !handles.empty() || gpu_events_.size() >= 32) {
+                exit_reason_ = "link: malformed GPU retirement";
+                stop(0);
+                return;
+            }
+            {
+                GpuEvent event;
+                event.kind = GpuEvent::Kind::Unregister;
+                event.generation = m.generation;
+                gpu_events_.push_back(std::move(event));
+            }
             break;
         }
         case Msg::SaveRegions: {
@@ -257,7 +317,18 @@ bool CoreLink::request_state(Msg type, const fs::path& path) {
     return true;
 }
 
-bool CoreLink::request_save_state(const fs::path& path) { return request_state(Msg::SaveState, path); }
+bool CoreLink::request_save_state(const fs::path& path, const std::vector<std::uint8_t>& thumbnail) {
+    if (!can_request_state()) return false;
+    if (!thumbnail.empty() && link_has_gpu_frames(identity_.protocol_minor)) {
+        if (thumbnail.size() != kStateThumbBytes) return false;
+        StateThumbnailMsg msg{};
+        msg.h.type = Msg::StateThumbnail;
+        msg.frame_number = done_;
+        std::copy(thumbnail.begin(), thumbnail.end(), msg.rgba);
+        if (!send_msg(channel_, msg)) return false;
+    }
+    return request_state(Msg::SaveState, path);
+}
 bool CoreLink::request_load_state(const fs::path& path) { return request_state(Msg::LoadState, path); }
 
 bool CoreLink::accessory_data_supported() const {
@@ -362,6 +433,30 @@ void CoreLink::on_ended(int code) {
         state_pending_ = false;
     }
     persist_saves(); // the hub's mappings survive the runner
+}
+
+std::optional<GpuEvent> CoreLink::poll_gpu_event() {
+    if (gpu_events_.empty()) return std::nullopt;
+    GpuEvent event = std::move(gpu_events_.front());
+    gpu_events_.pop_front();
+    return event;
+}
+
+bool CoreLink::gpu_status(std::uint64_t generation, std::uint32_t state,
+                          std::uint32_t released,
+                          const std::array<std::uint64_t, RCORE_GPU_MAX_IMAGES>& frames) {
+    if (!generation || !link_has_gpu_frames(identity_.protocol_minor) ||
+        state_ == LinkState::Idle || state_ == LinkState::Ended ||
+        (state != RCORE_GPU_RING_READY && state != RCORE_GPU_RING_REFUSED &&
+         state != RCORE_GPU_RING_RETIRED) ||
+        released >= (1u << RCORE_GPU_MAX_IMAGES)) return false;
+    GpuStatusMsg msg{};
+    msg.h.type = Msg::GpuStatus;
+    msg.generation = generation;
+    msg.state = state;
+    msg.released = released;
+    std::copy(frames.begin(), frames.end(), std::begin(msg.frame_number));
+    return send_msg(channel_, msg);
 }
 
 void CoreLink::stop(int grace_ms) {

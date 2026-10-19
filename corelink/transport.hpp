@@ -35,6 +35,8 @@ constexpr NativeHandle kNoHandle = -1;
 #endif
 
 void close_handle(NativeHandle h);
+// Retain an independent reference in this process; caller still owns h.
+NativeHandle retain_handle(NativeHandle h);
 
 // A shared memory object and this process's mapping of it.
 struct SharedMemory {
