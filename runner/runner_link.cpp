@@ -12,6 +12,7 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <vector>
 
 namespace retro::runner {
@@ -101,6 +102,113 @@ public:
         : sock_(sock), shm_(shm), log_(out / "core.log"), events_(out / "events.tsv") {
         base_ = reinterpret_cast<std::uint8_t*>(shm);
     }
+    ~LinkSink() override {
+        for (auto& item : gpu_rings_) close_gpu_handles(item.second);
+    }
+    void set_gpu_capabilities(const rcore_gpu_capabilities& caps) { gpu_caps_ = caps; }
+    bool gpu_capabilities(rcore_gpu_capabilities& out) override {
+        out = gpu_caps_;
+        return out.handle_types && out.sync_types;
+    }
+    bool gpu_register(const rcore_gpu_ring& ring) override {
+        if (ring.generation <= gpu_last_generation_ || gpu_rings_.size() >= 2) return false;
+        GpuRing record;
+        record.count = ring.image_count;
+        GpuRingMsg msg{};
+        msg.h.type = Msg::GpuRing;
+        msg.ring = ring;
+        for (std::uint32_t i = 0; i < ring.image_count; ++i) {
+            const auto& im = ring.images[i];
+            for (auto value : {im.memory_handle, im.ready_semaphore, im.release_semaphore}) {
+                const auto own = retain_handle(static_cast<NativeHandle>(value));
+                if (own == kNoHandle) { close_gpu_handles(record); return false; }
+                record.handles.push_back(own);
+            }
+            msg.ring.images[i].memory_handle = 0;
+            msg.ring.images[i].ready_semaphore = 0;
+            msg.ring.images[i].release_semaphore = 0;
+        }
+        if (!send_msg(sock_, msg, record.handles.data(), record.handles.size())) {
+            close_gpu_handles(record);
+            return false;
+        }
+        gpu_last_generation_ = ring.generation;
+        gpu_rings_.emplace(ring.generation, std::move(record));
+        return true;
+    }
+    std::uint32_t gpu_released(std::uint64_t generation, std::uint32_t& released) override {
+        auto it = gpu_rings_.find(generation);
+        if (it == gpu_rings_.end()) { released = 0; return RCORE_GPU_RING_REFUSED; }
+        auto& ring = it->second;
+        released = ring.released;
+        ring.released = 0;
+        const auto state = ring.state;
+        if (state == RCORE_GPU_RING_RETIRED) {
+            close_gpu_handles(ring);
+            gpu_rings_.erase(it);
+        }
+        return state;
+    }
+    bool gpu_frame(const rcore_gpu_frame& f) override {
+        if (!frame_number) return false; // pre-grant pictures retain CPU output
+        auto it = gpu_rings_.find(f.generation);
+        if (it == gpu_rings_.end()) return false;
+        auto& ring = it->second;
+        if (ring.state != RCORE_GPU_RING_READY || ring.retiring || f.image_index >= ring.count ||
+            !(ring.free & (1u << f.image_index))) return false;
+        GpuFrameMsg msg{};
+        msg.h.type = Msg::GpuFrame;
+        msg.frame = f;
+        msg.frame.frame_number = frame_number;
+        if (!send_msg(sock_, msg)) return false;
+        ring.free &= ~(1u << f.image_index);
+        ring.in_flight[f.image_index] = frame_number;
+        last_game_frame = f.game_frame;
+        last_gpu_ = true;
+        return true;
+    }
+    void gpu_unregister(std::uint64_t generation) override {
+        auto it = gpu_rings_.find(generation);
+        if (it == gpu_rings_.end() || it->second.retiring) return;
+        it->second.retiring = true;
+        GpuUnregisterMsg msg{};
+        msg.h.type = Msg::GpuUnregister;
+        msg.generation = generation;
+        send_msg(sock_, msg);
+    }
+    bool take_gpu_status(const std::vector<unsigned char>& packet) {
+        Msg type{};
+        if (!packet_type(packet, type) || type != Msg::GpuStatus) return false;
+        GpuStatusMsg msg{};
+        if (!as_msg(packet, msg)) return true;
+        auto it = gpu_rings_.find(msg.generation);
+        if (it == gpu_rings_.end()) return true; // retired generation
+        auto& ring = it->second;
+        if (msg.state == RCORE_GPU_RING_REFUSED) {
+            ring.state = RCORE_GPU_RING_REFUSED;
+            ring.free = ring.released = 0;
+            close_gpu_handles(ring);
+        } else if (msg.state == RCORE_GPU_RING_READY && ring.state == RCORE_GPU_RING_PENDING) {
+            ring.state = RCORE_GPU_RING_READY;
+            ring.free = ring.released = (1u << ring.count) - 1;
+            close_gpu_handles(ring); // hub now owns independent references
+        } else {
+            for (std::uint32_t i = 0; i < ring.count; ++i) {
+                if ((msg.released & (1u << i)) && ring.in_flight[i] &&
+                    ring.in_flight[i] == msg.frame_number[i]) {
+                    ring.in_flight[i] = 0;
+                    ring.free |= 1u << i;
+                    ring.released |= 1u << i;
+                }
+            }
+            if (msg.state == RCORE_GPU_RING_RETIRED && ring.retiring &&
+                std::all_of(ring.in_flight.begin(), ring.in_flight.end(), [](auto v) { return v == 0; })) {
+                ring.state = RCORE_GPU_RING_RETIRED;
+                close_gpu_handles(ring);
+            }
+        }
+        return true;
+    }
 
     void log(std::uint32_t level, const char* msg) override {
         log_ << level << '\t' << msg << '\n';
@@ -134,6 +242,7 @@ public:
     }
 
     void frame(const rcore_frame& f) override {
+        last_gpu_ = false;
         if (f.pixel_format != RCORE_PIXEL_RGBA8 || f.width > kMaxFrameWidth ||
             f.height > kMaxFrameHeight) {
             ++bad_frames; // reported at the end of the frame, not mid-core
@@ -166,11 +275,22 @@ public:
     // slot is the middle or the hub's front: nobody writes it until the runner
     // publishes again, which it is not doing while it answers a request.
     std::vector<std::uint8_t> thumbnail() const {
+        if (host_thumb_frame_ == frame_number) return host_thumbnail_;
+        if (last_gpu_) return {}; // a CPU slot from an earlier field is stale
         if (published_ < 0) return {};
         const FrameInfo& info = shm_->slot[published_];
         return state::make_thumbnail(base_ + shm_->frames_offset +
                                          std::size_t(published_) * kFrameSlotBytes,
                                      info.width, info.height, info.stride);
+    }
+
+    void take_thumbnail(const std::vector<unsigned char>& packet) {
+        static_assert(state::kThumbWidth * state::kThumbHeight * 4 == kStateThumbBytes);
+        StateThumbnailMsg msg{};
+        if (as_msg(packet, msg) && msg.frame_number == frame_number) {
+            host_thumbnail_.assign(std::begin(msg.rgba), std::end(msg.rgba));
+            host_thumb_frame_ = frame_number;
+        }
     }
 
     void audio(const std::int16_t* samples, std::uint32_t n) override {
@@ -223,6 +343,23 @@ public:
     std::uint32_t rate_num = 0, rate_den = 0;
 
 private:
+    bool last_gpu_ = false;
+    std::uint64_t host_thumb_frame_ = UINT64_MAX;
+    std::vector<std::uint8_t> host_thumbnail_;
+    struct GpuRing {
+        std::uint32_t state = RCORE_GPU_RING_PENDING;
+        std::uint32_t count = 0, free = 0, released = 0;
+        bool retiring = false;
+        std::array<std::uint64_t, RCORE_GPU_MAX_IMAGES> in_flight{};
+        std::vector<NativeHandle> handles;
+    };
+    static void close_gpu_handles(GpuRing& ring) {
+        for (auto h : ring.handles) close_handle(h);
+        ring.handles.clear();
+    }
+    std::map<std::uint64_t, GpuRing> gpu_rings_;
+    rcore_gpu_capabilities gpu_caps_{};
+    std::uint64_t gpu_last_generation_ = 0;
     Channel& sock_;
     SharedHeader* shm_;
     std::uint8_t* base_;
@@ -292,6 +429,16 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
 
     LinkSink sink(sock, shm, a.out);
     HostSession session(core, sink);
+    if (link_has_gpu_frames(session_minor)) {
+        std::vector<unsigned char> packet;
+        if (recv_packet(sock, packet, nullptr, -1) != RecvResult::Packet) return 0;
+        GpuCapabilitiesMsg offered{};
+        Msg type{};
+        if (!packet_type(packet, type) || type != Msg::GpuCapabilities || !as_msg(packet, offered))
+            return exiting(sock, 2, "link: missing GPU capability setup");
+        sink.set_gpu_capabilities(offered.caps);
+        session.offer_gpu_frames();
+    }
     for (const DataAccessory& d : a.data_accessories) session.bind_data_accessory(d.seat, d.slot);
     // 2.1: a hub's AccessoryData, queued for the next granted frame. One
     // arriving for a (seat, slot) nothing is plugged into is dropped and said
@@ -383,6 +530,7 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         if (rr != RecvResult::Packet) return 0; // the hub went away before playing
         Msg t{};
         packet_type(buf, t);
+        if (sink.take_gpu_status(buf)) continue;
         SavesFilledMsg filled{};
         if (t == Msg::SavesFilled && as_msg(buf, filled)) {
             std::copy(std::begin(filled.pads), std::end(filled.pads), std::begin(sink.pads));
@@ -461,7 +609,12 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         if (rr != RecvResult::Packet) break; // hub gone: stop quietly
         Msg t{};
         packet_type(buf, t);
+        if (sink.take_gpu_status(buf)) continue;
         if (t == Msg::Quit) break;
+        if (t == Msg::StateThumbnail && link_has_gpu_frames(session_minor)) {
+            sink.take_thumbnail(buf);
+            continue;
+        }
         if (t == Msg::AccessoryData) {
             take_accessory_data(buf);
             continue;
@@ -549,6 +702,7 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
                     if (recv_packet(sock, peek, nullptr, 0) == RecvResult::Packet) {
                         Msg pt{};
                         packet_type(peek, pt);
+                        if (sink.take_gpu_status(peek)) continue;
                         if (pt == Msg::Quit) {
                             quit = true;
                             break;

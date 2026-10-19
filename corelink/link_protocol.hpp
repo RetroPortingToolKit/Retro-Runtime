@@ -44,7 +44,11 @@ constexpr std::uint32_t kProtocolMajor = 2;
 // message: a 2.2 runner sends it at its 2.1 size to a 2.1 hub, and a 2.2 hub
 // reads a 2.1 runner's with both fields zero.
 // 2.3: Grant appends the available drawable pixel area (rcore rev 9).
-constexpr std::uint32_t kProtocolMinor = 3;
+// 2.4: optional core-owned GPU rings, native handle transfer and release events.
+constexpr std::uint32_t kProtocolMinor = 4;
+constexpr bool link_has_gpu_frames(std::uint32_t peer_minor) {
+    return kProtocolMajor > 2 || peer_minor >= 4;
+}
 constexpr bool link_has_presentation_size(std::uint32_t peer_minor) {
     return kProtocolMajor > 2 || peer_minor >= 3;
 }
@@ -147,6 +151,9 @@ enum class Msg : std::uint32_t {
     Exiting = 7,     // the runner is stopping on purpose; the reason follows
     StateDone = 8,   // 1.1: how the last SaveState / LoadState went
     AccessoryNotify = 9, // 2.1: a data accessory's bytes for the hub (accessory_notify)
+    GpuRing = 10,        // 2.4: metadata plus 3 native handles per image
+    GpuFrame = 11,       // accepted GPU picture, before its FrameDone
+    GpuUnregister = 12,  // retire a generation after all GPU users finish
     // hub -> runner
     SavesFilled = 64, // every region filled from its file; the seats at power-on
     Grant = 65,       // run exactly one frame, with these pads
@@ -154,11 +161,46 @@ enum class Msg : std::uint32_t {
     SaveState = 67,   // 1.1: serialize now, into an envelope at this path
     LoadState = 68,   // 1.1: check the envelope at this path, then unserialize
     AccessoryData = 69, // 2.1: a data accessory's bytes for the core (accessory_poll)
+    GpuCapabilities = 70, // 2.4: once after Hello, before core init
+    GpuStatus = 71,       // resource ownership events, not capabilities
+    StateThumbnail = 72, // 2.4: displayed image observer for the next save
 };
 
 struct MsgHeader {
     Msg type;
     std::uint32_t size; // whole packet, header included
+};
+
+struct GpuCapabilitiesMsg {
+    MsgHeader h;
+    rcore_gpu_capabilities caps;
+};
+struct GpuRingMsg {
+    MsgHeader h;
+    // Handle fields are zero on wire; channel handles own the references.
+    rcore_gpu_ring ring;
+};
+struct GpuFrameMsg {
+    MsgHeader h;
+    rcore_gpu_frame frame;
+};
+struct GpuUnregisterMsg {
+    MsgHeader h;
+    std::uint64_t generation;
+};
+struct GpuStatusMsg {
+    MsgHeader h;
+    std::uint64_t generation;
+    std::uint32_t state;
+    std::uint32_t released;
+    // Match the submitted link-frame number; stale releases cannot free reuse.
+    std::uint64_t frame_number[RCORE_GPU_MAX_IMAGES];
+};
+constexpr std::size_t kStateThumbBytes = 160u * 120u * 4u;
+struct StateThumbnailMsg {
+    MsgHeader h;
+    std::uint64_t frame_number;
+    std::uint8_t rgba[kStateThumbBytes];
 };
 
 struct HelloMsg {
@@ -282,8 +324,9 @@ struct AccessoryDataMsg {
 };
 constexpr std::size_t kAccessoryMsgHeaderSize = offsetof(AccessoryDataMsg, data);
 
-constexpr std::size_t kMaxMsgSize = sizeof(AccessoryDataMsg); // the largest message
-static_assert(kMaxMsgSize >= sizeof(SaveRegionsMsg) && kMaxMsgSize >= sizeof(LogMsg) &&
+constexpr std::size_t kMaxMsgSize = sizeof(StateThumbnailMsg); // the largest message
+static_assert(kMaxMsgSize >= sizeof(AccessoryDataMsg) &&
+                  kMaxMsgSize >= sizeof(SaveRegionsMsg) && kMaxMsgSize >= sizeof(LogMsg) &&
                   kMaxMsgSize >= sizeof(StateRequestMsg) && kMaxMsgSize >= sizeof(StateDoneMsg) &&
                   kMaxMsgSize >= sizeof(EventMsg),
               "kMaxMsgSize must hold every message");

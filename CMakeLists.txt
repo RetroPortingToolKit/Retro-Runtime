@@ -117,6 +117,10 @@ if(RETRO_RUNTIME_TOOLS)
         runner/net_session.cpp
         runner/net_module.cpp
     )
+    add_executable(retro-gpu-host-test tests/gpu_host_test.cpp runner/host_session.cpp)
+    target_include_directories(retro-gpu-host-test PRIVATE runner)
+    target_link_libraries(retro-gpu-host-test PRIVATE retro_core_support)
+    add_test(NAME gpu_host_contract COMMAND retro-gpu-host-test)
     # Netplay (runner/net_session.hpp): recomp-net's episode driver and UDP
     # transport, compiled in from a checkout when one is named. Without it the
     # runner answers `netplay 0` and refuses --net-*.

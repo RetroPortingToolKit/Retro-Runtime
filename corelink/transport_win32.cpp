@@ -209,6 +209,13 @@ void close_handle(NativeHandle h) {
     if (h != kNoHandle) CloseHandle(H(h));
 }
 
+NativeHandle retain_handle(NativeHandle h) {
+    HANDLE copy = nullptr;
+    if (!h || !DuplicateHandle(GetCurrentProcess(), H(h), GetCurrentProcess(), &copy,
+                               0, FALSE, DUPLICATE_SAME_ACCESS)) return kNoHandle;
+    return N(copy);
+}
+
 // ---- memory -------------------------------------------------------------------
 
 bool create_shared(std::size_t size, const char* name, SharedMemory& out, std::string* error) {
