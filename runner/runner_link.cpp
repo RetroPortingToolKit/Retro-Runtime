@@ -460,6 +460,14 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
     };
     std::string err;
     if (!session.set_options(a.overrides, &err)) return exiting(sock, 2, err);
+    std::optional<Route> route;
+    if (a.route.active()) {
+        route.emplace(core,session,a.route,a.out);
+        if (!route->open(a.rom,a.package_sha256,a.title_dir,a.strict)) {
+            route->finish(false); return exiting(sock,2,route->error());
+        }
+        if (!route->anchored()) session.set_route(&*route);
+    }
     if (a.gl) lend_gl(session);
 
     const std::string cache = a.out.string();
@@ -546,8 +554,24 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
             return 0;
         }
     }
-    session.adopt_external_save_regions(regs, nregs, memory);
+    const bool private_saves = route && route->playback();
+    if (private_saves || link_has_replays(session_minor)) {
+        // Playback uses private save memory. The hub's mappings remain
+        // untouched, even if the runner crashes and the hub persists them.
+        session.adopt_save_regions(regs,nregs,{});
+        if (!private_saves) for (std::size_t i=0;i<memory.size();++i)
+            if (regs[i].size) std::memcpy(session.save_regions()[i].data,memory[i],regs[i].size);
+    } else session.adopt_external_save_regions(regs, nregs, memory);
+    if (route && !route->initial_saves()) {
+        session.set_route(nullptr); route->finish(false); return exiting(sock,2,route->error());
+    }
 
+    if (route) session.set_route(&*route);
+    auto mirror_saves = [&] {
+        if (private_saves || !link_has_replays(session_minor)) return;
+        for (std::size_t i=0;i<memory.size();++i)
+            if (regs[i].size) std::memcpy(memory[i],session.save_regions()[i].data,regs[i].size);
+    };
     StateKeeper keeper(core, session, a.rom, a.package_sha256, bindings);
     // A core that can save gets its content hashed now, off the core thread,
     // so the player's first save does not wait on it.
@@ -604,13 +628,25 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
     PerfHint hint;
     bool hint_said = false;
     int code = 0;
+    bool user_quit = false;
+    bool taken_over = false, takeover_armed = false;
+    std::string recording_path = a.route.record.string();
+    auto replay_status = [&](ReplayState state, const std::string& detail = {}) {
+        if (!link_has_replays(session_minor)) return;
+        ReplayStatusMsg msg{}; msg.h.type=Msg::ReplayStatus; msg.state=state;
+        msg.fields=route ? route->field() : 0;
+        copy_str(msg.path,sizeof msg.path,recording_path.c_str());
+        copy_str(msg.detail,sizeof msg.detail,detail.c_str());
+        send_msg(sock,msg);
+    };
+    if (route) replay_status(route->playback() ? ReplayState::Playing : ReplayState::Recording);
     for (;;) {
         const RecvResult rr = recv_packet(sock, buf, nullptr, -1);
-        if (rr != RecvResult::Packet) break; // hub gone: stop quietly
+        if (rr != RecvResult::Packet) { user_quit = true; break; }
         Msg t{};
         packet_type(buf, t);
         if (sink.take_gpu_status(buf)) continue;
-        if (t == Msg::Quit) break;
+        if (t == Msg::Quit) { user_quit = true; break; }
         if (t == Msg::StateThumbnail && link_has_gpu_frames(session_minor)) {
             sink.take_thumbnail(buf);
             continue;
@@ -619,13 +655,46 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
             take_accessory_data(buf);
             continue;
         }
-        if ((t == Msg::SaveState || t == Msg::LoadState) && a.netplay) {
+        if (t == Msg::ReplayControl && link_has_replays(session_minor)) {
+            ReplayControlMsg request{};
+            if (!as_msg(buf,request) || request.record>1) {
+                replay_status(ReplayState::Failed,"malformed replay request"); continue;
+            }
+            request.path[sizeof request.path-1]=0;
+            if (a.netplay || !bindings.empty() || !a.data_accessories.empty() || private_saves) {
+                replay_status(ReplayState::Failed,"recording is off during playback, netplay or accessory sessions"); continue;
+            }
+            if (request.record) {
+                if (route && !taken_over) {
+                    replay_status(route->playback() ? ReplayState::Playing : ReplayState::Recording,"a replay is already active"); continue;
+                }
+                route.reset();
+                RouteArgs args=a.route; args.play.clear(); args.record=utf8_path(request.path);
+                args.verdict=args.record; args.verdict += ".verdict.json";
+                if (args.record.empty()) { replay_status(ReplayState::Failed,"a replay destination is required"); continue; }
+                route.emplace(core,session,args,a.out); recording_path=request.path;
+                if (!route->open(a.rom,a.package_sha256,a.title_dir,a.strict) ||
+                    !route->capture_anchor() || !route->initial_saves()) {
+                    const auto why=route->error(); route->finish(false);
+                    replay_status(ReplayState::Failed,why); route.reset(); continue;
+                }
+                taken_over=false; takeover_armed=false; session.set_route(&*route);
+                replay_status(ReplayState::Recording);
+            } else if (route && !route->playback()) {
+                session.set_route(nullptr);
+                const bool ok=route->finish(true);
+                replay_status(ok ? ReplayState::Saved : ReplayState::Failed,route->error());
+                route.reset();
+            } else replay_status(ReplayState::Failed,"no recording is active");
+            continue;
+        }
+        if ((t == Msg::SaveState || t == Msg::LoadState) && (a.netplay || (route && !taken_over))) {
             // A match starts from a cold boot and is never rewound by a player.
             StateDoneMsg d{};
             d.h.type = Msg::StateDone;
             d.request = t;
             d.ok = 0;
-            copy_str(d.detail, sizeof d.detail, "savestates are off during a netplay match");
+            copy_str(d.detail, sizeof d.detail, route ? "savestates are off during a boot route" : "savestates are off during a netplay match");
             send_msg(sock, d);
             continue;
         }
@@ -664,12 +733,26 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
             break;
         }
         std::copy(std::begin(g.pads), std::end(g.pads), std::begin(sink.pads));
+        if (route && route->playback() && a.route.takeover && !taken_over) {
+            const bool active = Route::live_input(g.pads);
+            if (!active) takeover_armed = true;
+            else if (takeover_armed) {
+                if (!route->finish(true,false,true)) { code=exiting(sock,route->exit_code(),route->error());break; }
+                session.set_route(nullptr);
+                taken_over=true;
+                replay_status(ReplayState::TakenOver);
+                std::fprintf(stderr,"route: live input took over at field %llu\n",static_cast<unsigned long long>(g.frame_number));
+            }
+        }
         sink.frame_number = g.frame_number;
         session.set_presentation_size(g.presentation_width, g.presentation_height);
         // Everything that arrived before this grant is the frame's accessory
         // sequence; a message that arrives while the frame runs waits for the
         // next (the runner reads nothing from the hub mid-frame).
         session.begin_frame_accessories();
+        if (route && !taken_over && !route->begin(g.presentation_width,g.presentation_height)) {
+            code = exiting(sock,route->exit_code(),route->error()); break;
+        }
         FrameDoneMsg done{};
         done.h.type = Msg::FrameDone;
         done.frame_number = g.frame_number;
@@ -724,6 +807,10 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
             if (quit) break;
         }
         done.game_frame = sink.last_game_frame;
+        if (route && !taken_over && done.result == RCORE_OK && !route->end()) {
+            code = exiting(sock,route->exit_code(),route->error()); break;
+        }
+        mirror_saves();
         send_msg_sized(sock, done, frame_done_size);
         const std::uint64_t period_ns =
             sink.rate_num && sink.rate_den
@@ -744,9 +831,20 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
                                         std::to_string(done.result));
             break;
         }
+        if (route && !taken_over && route->done()) break;
     }
+    session.set_route(nullptr);
+    if (route && !route->finish(!code && !sink.faults,user_quit)) {
+        if (!code) code = exiting(sock,route->exit_code(),route->error());
+    }
+    if (route && !taken_over) replay_status(code || sink.faults ? ReplayState::Failed :
+        route->playback() ? (user_quit ? ReplayState::Stopped : ReplayState::Complete) : ReplayState::Saved,
+        route->error());
+    mirror_saves();
     core.api->unload();
     core.api->deinit();
+    if (route && route->playback() && !code && !sink.faults)
+        exiting(sock,0,taken_over ? "live session complete after replay takeover" : user_quit ? "replay stopped" : "replay complete");
     return code ? code : (sink.faults ? 1 : 0);
 }
 

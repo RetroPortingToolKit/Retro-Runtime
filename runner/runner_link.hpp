@@ -7,6 +7,7 @@
 #include "core_manifest.hpp"
 #include "host_session.hpp"
 #include "net_session.hpp"
+#include "route.hpp"
 
 #include <map>
 #include <optional>
@@ -53,6 +54,7 @@ std::string check_data_accessories(const LoadedCore& core, const std::vector<Dat
                                    bool netplay);
 
 struct LinkArgs {
+    RouteArgs route;
     std::string rom;
     std::string package;     // --package; empty for a core without game_package
     std::string package_sha256; // the runner's hash of it, for savestate envelopes

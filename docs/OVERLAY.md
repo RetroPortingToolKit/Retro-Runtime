@@ -175,7 +175,7 @@ These are the hub's choices, listed here because every core gets them:
 | F3 | show / hide FPS (also a setting: "Show FPS", saved in `<data_dir>/play.ini`) |
 | Tab (held) | turbo; sound is dropped while it runs |
 | + / - (`=` `-` or keypad) | volume, 10% steps, meter on the right (saved in `play.ini`) |
-| F7, or SELECT + R1 (Retro-Launcher's hub: Function + R1, rebindable) | save states |
+| F7, or SELECT + R1 (Retro-Launcher's hub: Function + R1, rebindable) | save states / replays |
 | Esc, F1 (Retro-Launcher's hub: also L3 + R3 or Function + Start; never Guide, which Steam keeps) | the pause menu, which also has Save states, Show FPS and Volume |
 
 - The recomp-ui family binds FPS to F. In the hub F drives C-Left (the TFGH
@@ -216,3 +216,8 @@ These are the hub's choices, listed here because every core gets them:
 - **Not checked:** a real screen, a real controller (the SELECT + R1 chord,
   stick repeat), sound and volume by ear, and the settings page's new section
   as drawn. Those are Alex's to judge.
+
+The hub adds a Replays page to the F7 save menu. F11 starts/stops anchored
+recording; a red REC indicator appears only after runner confirmation. Fullscreen
+is Alt+Enter. Playback, export copies and confirmed deletion are available on
+the Replays page. See [Input replays](BOOT_ROUTES.md).

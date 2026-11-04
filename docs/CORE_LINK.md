@@ -209,9 +209,9 @@ package; `--title-dir` then defaults to the shim's directory.
   `game_package 1`, the window shows the error and the hub exits 1. A background
   runtime update applies from the next launch, never mid-session.
 - **Menu:** Esc or F1, or L3 + R3 on a pad, open the paused quick menu (Resume,
-  Save states, Show FPS, Volume, Close game). F11 toggles fullscreen.
+  Save states, Replays, Show FPS, Volume, Close game). Alt+Enter toggles fullscreen.
 - **Overlay** (`OVERLAY.md`): F3 FPS, Tab (held) turbo, +/- volume, F7 save
-  states by default. Since 2026-09-27 the hub's hotkeys are the player's to
+  states/replays and F11 recording by default (see `BOOT_ROUTES.md`). Since 2026-09-27 the hub's hotkeys are the player's to
   bind (Retro-Launcher's settings page, `play.ini` `[keys]` / `[combos]`), and
   its pad shortcuts are `Function + <button>`, Function being an input the
   player assigns per controller (Back by default: some USB pads report Select
@@ -264,3 +264,10 @@ All on `pokemonstadium_core.so` built clean from n64lle `ffa84cfc`.
   path exists (2.1); the hub's recognizer and its pak dropdown do not yet.
 - **The hub on macOS and Windows.** Retro Launcher builds `hub_play.cpp` only on
   Linux.
+
+## Replay controls (2.5)
+
+`ReplayControl` starts/stops anchored recording between grants. `ReplayStatus`
+confirms the actual state and destination; a host waits for its answer before
+granting another field. See [Input replays](BOOT_ROUTES.md) for the format,
+identity checks, private saves and fresh-process playback contract.

@@ -39,6 +39,9 @@
 using namespace retro::corelink;
 
 namespace {
+constexpr std::uint32_t kLeft = 1u << 20, kRight = 1u << 21,
+                        kUp = 1u << 22, kDown = 1u << 23;
+constexpr std::uint32_t kStick = kLeft | kRight | kUp | kDown;
 
 [[noreturn]] void die(const std::string& m) {
     std::fprintf(stderr, "retro-core-link-test: %s\n", m.c_str());
@@ -63,6 +66,10 @@ std::uint32_t script_buttons(const std::string& s) {
         else if (t == "ddown") b |= RCORE_PAD_DPAD_DOWN;
         else if (t == "dleft") b |= RCORE_PAD_DPAD_LEFT;
         else if (t == "dright") b |= RCORE_PAD_DPAD_RIGHT;
+        else if (t == "left") b |= kLeft;
+        else if (t == "right") b |= kRight;
+        else if (t == "up") b |= kUp;
+        else if (t == "down") b |= kDown;
         else die("--input-script: unknown button '" + t + "'");
         if (plus == std::string::npos) break;
         start = plus + 1;
@@ -81,6 +88,8 @@ int main(int argc, char** argv) {
     std::uint64_t frames = 60;
     bool seat0 = true;
     bool presentation_test = false;
+    bool expect_route_end = false;
+    std::string restart_route;
     std::vector<std::pair<std::uint64_t, std::uint32_t>> script;
     struct StateOp {
         std::uint64_t at;
@@ -88,6 +97,7 @@ int main(int argc, char** argv) {
         std::string path;
     };
     std::vector<StateOp> state_ops;
+    std::vector<StateOp> record_ops;
     struct AccessorySend {
         std::uint64_t before_frame;
         std::uint32_t seat, slot;
@@ -117,6 +127,7 @@ int main(int argc, char** argv) {
                         v.game_package, v.describe, v.accessory_data);
             return 0;
         } else if (a == "--runner") spec.runner = utf8_path(val());
+        else if (a == "--restart-route") restart_route=val();
         else if (a == "--core") spec.core = utf8_path(val());
         else if (a == "--rom") spec.rom = val();
         else if (a == "--package") spec.package = val();
@@ -156,6 +167,7 @@ int main(int argc, char** argv) {
         else if (a == "--strict") spec.strict = true;
         else if (a == "--no-seats") seat0 = false;
         else if (a == "--presentation-test") presentation_test = true;
+        else if (a == "--expect-route-end") expect_route_end = true;
         else if (a == "--opt") {
             const std::string kv = val();
             const auto eq = kv.find('=');
@@ -175,6 +187,12 @@ int main(int argc, char** argv) {
                 if (comma == std::string::npos) break;
                 start = comma + 1;
             }
+        } else if (a == "--record-start-at") {
+            const auto v=val(); const auto colon=v.find(':');
+            if (colon==std::string::npos) die("--record-start-at K:PATH");
+            record_ops.push_back({std::strtoull(v.substr(0,colon).c_str(),nullptr,10),true,v.substr(colon+1)});
+        } else if (a == "--record-stop-at") {
+            record_ops.push_back({std::strtoull(val().c_str(),nullptr,10),false,{}});
         } else if (a == "--state-save-at") {
             state_op(val(), true);
         } else if (a == "--state-load-at") {
@@ -207,6 +225,14 @@ int main(int argc, char** argv) {
         die("the runner ended before it was ready (exit " + std::to_string(link.exit_code()) +
             (link.exit_reason().empty() ? "" : ": " + link.exit_reason()) + "); see " +
             link.runner_log().string());
+    }
+    if (!restart_route.empty()) {
+        auto replay=spec;
+        replay.env.push_back("RETRO_PLAY_ROUTE="+restart_route);
+        replay.env.push_back("RETRO_ROUTE_TAKEOVER=1");
+        if (!link.restart(replay,&err)) die(err);
+        while (link.state()==LinkState::Starting) link.pump(100);
+        if (link.state()!=LinkState::Ready) die("selected replay refused: "+link.exit_reason());
     }
     const CoreIdentity& id = link.identity();
     std::printf("link: %s %s sha256 %s draft %u%s\n", id.core_id.c_str(), id.core_version.c_str(),
@@ -243,17 +269,38 @@ int main(int argc, char** argv) {
             for (const auto& [at, buttons] : script) {
                 if (at <= k) pads[0].buttons = buttons;
             }
+            const auto held = pads[0].buttons;
+            pads[0].buttons &= ~kStick;
+            pads[0].axes[RCORE_AXIS_LX] = held & kLeft ? -32767 : held & kRight ? 32767 : 0;
+            pads[0].axes[RCORE_AXIS_LY] = held & kUp ? 32767 : held & kDown ? -32767 : 0;
         }
         // Fixture exercises resize, unavailable/minimized, then recovery.
         const std::uint32_t pw = presentation_test && k != 3 ? (k == 1 ? 1280 : 2560) : 0;
         const std::uint32_t ph = presentation_test && k != 3 ? (k == 1 ? 720 : 1080) : 0;
-        if (!link.grant(pads, pw, ph)) die("grant " + std::to_string(k) + " refused");
+        if (!link.grant(pads, pw, ph)) {
+            if (expect_route_end) {
+                link.pump(100);
+                if (link.state()==LinkState::Ended && !link.exit_code()) break;
+            }
+            die("grant " + std::to_string(k) + " refused");
+        }
         while (link.state() == LinkState::Ready && link.frames_done() < k) link.pump(100);
         print_notifies();
-        if (link.state() != LinkState::Ready) ok = false;
+        const bool clean_route_end = expect_route_end && link.state()==LinkState::Ended && !link.exit_code();
+        if (link.state() != LinkState::Ready && !clean_route_end) ok = false;
         link.take_frame();
         std::int16_t sink[4096];
         while (link.drain_audio(sink, 2048)) {
+        }
+        if (clean_route_end) break;
+        for (const StateOp& op : record_ops) {
+            if (op.at!=k || !ok) continue;
+            if (!link.request_recording(op.save,utf8_path(op.path))) die("replay request refused");
+            while (link.replay_pending() && link.state()==LinkState::Ready) link.pump(100);
+            const auto& status=link.replay_status();
+            std::printf("replay: %s at %llu state %u fields %llu %s\n",op.save ? "start" : "stop",
+                static_cast<unsigned long long>(k),unsigned(status.state),
+                static_cast<unsigned long long>(status.fields),status.detail);
         }
         for (const StateOp& op : state_ops) {
             if (op.at != k || !ok) continue;

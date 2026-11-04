@@ -4,6 +4,10 @@ The child process that runs an rcore core for the Retro frontend. Design:
 `HOST_LIFECYCLE.md` (process model, states) and `CORE_ABI.md` (the contract).
 This page covers what exists and how it is checked.
 
+[Boot routes](BOOT_ROUTES.md) cover player input recording, fresh-process
+playback, private initial saves and checkpoint verdicts. This is separate
+from the same-process `--replay-at` save/restore probe below.
+
 **Status, 2026-09-25:** two modes. **Headless** is described here. **Link**
 (`--link`) is how the hub runs a core in its own window; see `CORE_LINK.md`.
 

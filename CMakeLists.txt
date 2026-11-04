@@ -81,6 +81,8 @@ if(WIN32)
 endif()
 
 add_library(retro_state STATIC state/state_envelope.cpp)
+add_library(retro_route STATIC runner/route.cpp)
+target_link_libraries(retro_route PUBLIC retro_core_support retro_corelink)
 target_include_directories(retro_state PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/state)
 target_link_libraries(retro_state PUBLIC retro_core_support)
 
@@ -119,8 +121,35 @@ if(RETRO_RUNTIME_TOOLS)
     )
     add_executable(retro-gpu-host-test tests/gpu_host_test.cpp runner/host_session.cpp)
     target_include_directories(retro-gpu-host-test PRIVATE runner)
-    target_link_libraries(retro-gpu-host-test PRIVATE retro_core_support)
+    target_link_libraries(retro-gpu-host-test PRIVATE retro_core_support retro_route)
     add_test(NAME gpu_host_contract COMMAND retro-gpu-host-test)
+    add_executable(retro-route-test tests/route_contract_test.cpp runner/host_session.cpp)
+    target_include_directories(retro-route-test PRIVATE runner)
+    target_link_libraries(retro-route-test PRIVATE retro_route)
+    add_test(NAME route_input_roundtrip COMMAND retro-route-test ${CMAKE_CURRENT_BINARY_DIR}/route-contract)
+    add_test(NAME runner_routes COMMAND ${CMAKE_COMMAND}
+        -DRUNNER=$<TARGET_FILE:retro-core-runner> -DCORE=$<TARGET_FILE:rcore_fake_core>
+        -DLINK=$<TARGET_FILE:retro-core-link-test> -DOUT=${CMAKE_CURRENT_BINARY_DIR}/route-integration
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/route_test.cmake)
+    add_test(NAME route_watch COMMAND ${CMAKE_COMMAND}
+        -DRUNNER=$<TARGET_FILE:retro-core-runner> -DCORE=$<TARGET_FILE:rcore_fake_core>
+        -DLINK=$<TARGET_FILE:retro-core-link-test> -DOUT=${CMAKE_CURRENT_BINARY_DIR}/route-watch
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/route_watch_test.cmake)
+    add_test(NAME route_anchor COMMAND ${CMAKE_COMMAND}
+        -DRUNNER=$<TARGET_FILE:retro-core-runner> -DCORE=$<TARGET_FILE:rcore_fake_core>
+        -DLINK=$<TARGET_FILE:retro-core-link-test> -DOUT=${CMAKE_CURRENT_BINARY_DIR}/route-anchor
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/route_anchor_test.cmake)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/route-tmp)
+        add_test(NAME route_recovery COMMAND ${Python3_EXECUTABLE} -I -B
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/route_recover_test.py)
+        set_tests_properties(route_recovery PROPERTIES ENVIRONMENT
+            "TEMP=${CMAKE_CURRENT_BINARY_DIR}/route-tmp;TMP=${CMAKE_CURRENT_BINARY_DIR}/route-tmp;PYTHONDONTWRITEBYTECODE=1")
+    else()
+        add_test(NAME route_recovery COMMAND ${CMAKE_COMMAND} -E echo "SKIP: Python3 is unavailable")
+        set_tests_properties(route_recovery PROPERTIES SKIP_REGULAR_EXPRESSION "SKIP:")
+    endif()
     # Netplay (runner/net_session.hpp): recomp-net's episode driver and UDP
     # transport, compiled in from a checkout when one is named. Without it the
     # runner answers `netplay 0` and refuses --net-*.
@@ -172,7 +201,7 @@ if(RETRO_RUNTIME_TOOLS)
     endif()
     # Threads: the savestate keeper hashes content off the core thread.
     find_package(Threads REQUIRED)
-    target_link_libraries(retro-core-runner PRIVATE retro_core_support retro_corelink retro_state
+    target_link_libraries(retro-core-runner PRIVATE retro_core_support retro_corelink retro_state retro_route
                           Threads::Threads)
     target_include_directories(retro-core-runner PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated)
     if(_sdl)

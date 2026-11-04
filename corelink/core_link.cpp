@@ -16,6 +16,13 @@ CoreLink::~CoreLink() {
     channel_.close();
 }
 
+bool CoreLink::restart(const LaunchSpec& spec, std::string* error) {
+    stop();
+    this->~CoreLink();
+    new (this) CoreLink();
+    return start(spec,error);
+}
+
 bool CoreLink::start(const LaunchSpec& spec, std::string* error) {
     auto fail = [&](const std::string& m) {
         if (error) *error = m;
@@ -256,6 +263,13 @@ void CoreLink::handle_packet(const std::vector<unsigned char>& buf,
             if (as_msg(buf, m)) exit_reason_ = m.reason;
             break;
         }
+        case Msg::ReplayStatus: {
+            ReplayStatusMsg m{};
+            if (!as_msg(buf,m)) break;
+            m.path[sizeof m.path-1]=0; m.detail[sizeof m.detail-1]=0;
+            replay_status_=m; replay_pending_=false;
+            break;
+        }
         case Msg::StateDone: {
             StateDoneMsg m{};
             if (!as_msg(buf, m) || !state_pending_) break;
@@ -298,6 +312,20 @@ bool CoreLink::grant(const rcore_pad pads[RCORE_MAX_SEATS], std::uint32_t width,
 bool CoreLink::states_supported() const {
     return state_ == LinkState::Ready && link_has_savestates(identity_.protocol_minor) &&
            (identity_.capabilities & RCORE_CAP_SAVESTATE);
+}
+
+bool CoreLink::replays_supported() const {
+    return states_supported() && link_has_replays(identity_.protocol_minor);
+}
+bool CoreLink::request_recording(bool record, const fs::path& path) {
+    if (!replays_supported() || !can_grant()) return false;
+    ReplayControlMsg m{}; m.h.type=Msg::ReplayControl; m.record=record ? 1 : 0;
+    const auto p=path_utf8(path);
+    if (p.size()>=sizeof m.path) return false;
+    std::memcpy(m.path,p.c_str(),p.size()+1);
+    if (!send_msg(channel_,m)) return false;
+    replay_pending_=true;
+    return true;
 }
 
 bool CoreLink::request_state(Msg type, const fs::path& path) {
@@ -425,6 +453,11 @@ void CoreLink::on_ended(int code) {
     exit_code_ = code;
     state_ = LinkState::Ended;
     outstanding_ = 0;
+    if (replay_pending_) {
+        replay_pending_=false;
+        replay_status_.state=ReplayState::Failed;
+        std::strcpy(replay_status_.detail,"the runner ended before it answered");
+    }
     if (state_pending_) {
         StateResult r = state_request_;
         r.ok = false;

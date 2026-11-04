@@ -1,4 +1,5 @@
 #include "host_session.hpp"
+#include "route.hpp"
 
 #include <chrono>
 #include <cstdio>
@@ -101,6 +102,7 @@ std::uint32_t HostSession::h_gpu_released(void* ctx, std::uint64_t generation,
 std::uint32_t HostSession::h_gpu_frame(void* ctx, const rcore_gpu_frame* frame) {
     if (!frame || frame->struct_size < sizeof *frame || !frame->generation ||
         frame->image_index >= RCORE_GPU_MAX_IMAGES) return 0;
+    if (self(ctx)->route_) self(ctx)->route_->gpu_video();
     return self(ctx)->sink_.gpu_frame(*frame) ? 1u : 0u;
 }
 
@@ -240,10 +242,12 @@ void HostSession::h_report(void* ctx, const rcore_event* e) {
 }
 
 void HostSession::h_video(void* ctx, const rcore_frame* f) {
+    if (f && self(ctx)->route_) self(ctx)->route_->video(*f);
     if (f) self(ctx)->sink_.frame(*f);
 }
 
 void HostSession::h_audio(void* ctx, const std::int16_t* s, std::uint32_t n) {
+    if (self(ctx)->route_) self(ctx)->route_->audio(s, n);
     self(ctx)->sink_.audio(s, n);
 }
 
@@ -254,6 +258,7 @@ void HostSession::h_input(void* ctx, std::uint32_t seat, rcore_pad* out) {
     rcore_pad pad{};
     pad.struct_size = sizeof(rcore_pad);
     HostSession* s = self(ctx);
+    if (s->route_ && s->route_->input(seat, pad)) { *out = pad; return; }
     // A seat bound to a data accessory reads no pad (rev 7): the console sees
     // the accessory alone on that port. Decided here, on the one path every
     // mode shares, so neither a Sink nor a hub can leak a pad into it.
@@ -263,6 +268,7 @@ void HostSession::h_input(void* ctx, std::uint32_t seat, rcore_pad* out) {
         if (s->input_source_) s->input_source_(seat, pad);
         else s->sink_.input(seat, pad);
     }
+    if (s->route_) s->route_->delivered(seat,pad);
     *out = pad;
 }
 
@@ -339,8 +345,9 @@ std::uint64_t HostSession::h_wall_clock(void* ctx) {
     if (s->clock_tick_) return s->clock_epoch_us_ + s->clock_tick_() * 1000000ull / 60ull;
     // Offline: real time.
     using namespace std::chrono;
-    return static_cast<std::uint64_t>(
+    const auto live = static_cast<std::uint64_t>(
         duration_cast<microseconds>(system_clock::now().time_since_epoch()).count());
+    return s->route_ ? s->route_->clock(live) : live;
 }
 
 } // namespace retro::runner
