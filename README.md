@@ -90,3 +90,6 @@ The runner can therefore update separately from hosts and cores:
 
 This repository was split out of Retro Launcher on 2026-09-25, with its
 history.
+
+See [Input replays](docs/BOOT_ROUTES.md) for recording, anchored playback,
+headless verification and link recording controls.

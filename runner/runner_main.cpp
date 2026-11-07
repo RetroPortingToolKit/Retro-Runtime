@@ -65,8 +65,10 @@
 #include "sha256.hpp"
 #include "state_keeper.hpp"
 #include "transport.hpp"
+#include "route.hpp"
 
 #include <array>
+#include <algorithm>
 #include <chrono>
 #include <cinttypes>
 #include <cstdio>
@@ -80,6 +82,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <csignal>
 
 #if defined(RETRO_RUNNER_HAVE_SDL3)
 #  include <SDL3/SDL.h>
@@ -92,6 +95,8 @@
 using namespace retro::runner;
 
 namespace {
+volatile std::sig_atomic_t route_stop = 0;
+void request_route_stop(int) { route_stop = 1; }
 
 [[noreturn]] void die(const std::string& msg) {
     std::fprintf(stderr, "retro-core-runner: %s\n", msg.c_str());
@@ -311,7 +316,8 @@ void print_version() {
                 "transfer_pak_seats %zu\n"
                 "netplay %d\n"
                 "netplay_module_abi %u\n"
-                "accessory_data 1\n",
+                "accessory_data 1\n"
+                "boot_routes 1\n",
                 RETRO_RUNTIME_VERSION, RETRO_RUNTIME_VERSION, RETRO_RUNTIME_COMMIT,
                 retro::corelink::kProtocolMajor, retro::corelink::kProtocolMinor,
                 RCORE_ABI_MAJOR, RCORE_DRAFT_REVISION, gl, retro::runner::kTransferPakSeats,
@@ -421,6 +427,13 @@ int main(int argc, char** argv) {
     bool gl = false, strict = false, seat0 = true, list_options = false, link = false;
     bool describe = false;
     std::optional<std::uint64_t> replay_at;
+    RouteArgs route_args;
+    route_args.runner = retro::corelink::utf8_path(args[0]);
+    if (const char* p = std::getenv("RETRO_RECORD_ROUTE")) route_args.record = retro::corelink::utf8_path(p);
+    if (const char* p = std::getenv("RETRO_PLAY_ROUTE")) route_args.play = retro::corelink::utf8_path(p);
+    if (const char* p = std::getenv("RETRO_ROUTE_VERDICT")) route_args.verdict = retro::corelink::utf8_path(p);
+    if (const char* p = std::getenv("RETRO_ROUTE_RUNNER_REFERENCE")) route_args.runner_reference = retro::corelink::utf8_path(p);
+    if (const char* p = std::getenv("RETRO_ROUTE_TAKEOVER")) route_args.takeover = std::strcmp(p,"1")==0;
     std::map<std::string, std::string> overrides;
     std::vector<std::pair<std::uint64_t, std::uint32_t>> script;
     // Netplay (net_session.hpp): any --net-* flag makes this a netplay run.
@@ -473,6 +486,18 @@ int main(int argc, char** argv) {
         else if (a == "--list-options") list_options = true;
         else if (a == "--describe") describe = true;
         else if (a == "--replay-at") replay_at = num(val());
+        else if (a == "--record-route") route_args.record = retro::corelink::utf8_path(val());
+        else if (a == "--play-route") route_args.play = retro::corelink::utf8_path(val());
+        else if (a == "--route-verdict") route_args.verdict = retro::corelink::utf8_path(val());
+        else if (a == "--route-runner-reference") route_args.runner_reference = retro::corelink::utf8_path(val());
+        else if (a == "--route-takeover") route_args.takeover = true;
+        else if (a == "--route-allow-core-change") route_args.allow_core_change = true;
+        else if (a == "--route-mark") {
+            const auto mark = val(); const auto sep = mark.find(':');
+            if (sep == std::string::npos || sep == mark.size()-1) die("--route-mark FIELD:NAME");
+            const auto at = num(mark.substr(0,sep));
+            if (!at || !route_args.marks.emplace(at,mark.substr(sep+1)).second) die("duplicate or zero route mark");
+        }
         else if (a == "--net-module") { netplay = true; net.module_path = val(); }
         else if (a == "--net-slot") { netplay = true; net.slot = static_cast<int>(num(val())); }
         else if (a == "--net-slots") { netplay = true; net.slots = static_cast<int>(num(val())); }
@@ -509,6 +534,13 @@ int main(int argc, char** argv) {
         }
     }
     if (core_path.empty()) die("--core <library> is required");
+    if (route_args.active() && (netplay || load_state || replay_at || accessory_script ||
+        std::any_of(vru_seats.begin(),vru_seats.end(),[](bool v){return v;}) ||
+        std::any_of(tpak_roms.begin(),tpak_roms.end(),[](const auto& v){return !v.empty();})))
+        die("boot routes refuse netplay, loaded states and accessories");
+    if (!route_args.play.empty() && (!script.empty() || !route_args.record.empty()))
+        die("--play-route refuses an input script or recorder");
+    if (route_args.takeover && (!link || route_args.play.empty())) die("--route-takeover requires link playback");
     if (net.module_path.empty())
         if (const char* e = std::getenv("RETRO_NETPLAY_MODULE")) net.module_path = e;
     if (netplay && (replay_at || load_state))
@@ -639,6 +671,7 @@ int main(int argc, char** argv) {
         void (*lend)(HostSession&) = lend_gl_context;
 #endif
         LinkArgs la;
+        la.route = route_args;
         la.rom = rom;
         la.package = package;
         la.package_sha256 = pkg_sha;
@@ -704,6 +737,15 @@ int main(int argc, char** argv) {
         }
     }
     if (!session.set_options(overrides, &err)) die(err);
+    std::optional<Route> route;
+    if (route_args.active()) {
+        route.emplace(core,session,route_args,out);
+        if (!route->open(rom,pkg_sha,title_dir,strict)) { route->finish(false); die(route->error()); }
+        if (!route->anchored()) session.set_route(&*route);
+        if (route->playback()) frames = route->length();
+        std::signal(SIGINT,request_route_stop);
+        std::signal(SIGTERM,request_route_stop);
+    }
     for (const auto& [k, v] : session.options()) {
         if (v) std::printf("option %s = %s\n", k.c_str(), v->c_str());
         else if (list_options) std::printf("option %s unset\n", k.c_str());
@@ -759,6 +801,8 @@ int main(int argc, char** argv) {
         if (tpak_rtcs[seat]) save_files[id + ".rtc"] = *tpak_rtcs[seat];
     }
     session.adopt_save_regions(regs, nregs, save_files);
+    if (route && !route->initial_saves()) { session.set_route(nullptr); route->finish(false); die(route->error()); }
+    if (route) session.set_route(&*route);
     for (const SaveRegion& r : session.save_regions()) {
         std::printf("save region %s: kind=%u seat=%u size=%zu from %s\n", r.id.c_str(), r.kind,
                     r.seat, r.size, r.file ? r.file->string().c_str() : "(none)");
@@ -894,11 +938,14 @@ int main(int argc, char** argv) {
                 if (l.frame == k) session.queue_accessory_data(l.seat, l.slot, l.bytes.data(), l.bytes.size());
             }
             session.begin_frame_accessories();
+            if (route && !route->begin()) return false;
             if (const rcore_result rc = core.api->run_frame(); rc != RCORE_OK) {
                 std::fprintf(stderr, "retro-core-runner: run_frame %llu -> %d\n",
                              static_cast<unsigned long long>(k), rc);
                 return false;
             }
+            if (route && !route->end()) return false;
+            if (route && route_stop) break;
         }
         return true;
     };
@@ -924,6 +971,12 @@ int main(int argc, char** argv) {
         std::printf("%s\n", replay_verdict.c_str());
     }
 
+    session.set_route(nullptr);
+    if (route && !route->finish(ok && !sink.faults)) {
+        std::fprintf(stderr,"route: %s\n",route->error().c_str());
+        core.api->unload(); core.api->deinit();
+        return route->exit_code();
+    }
     core.api->unload();
     write_ppm(out / "shot.ppm", sink.last, sink.last_w, sink.last_h);
     session.persist_save_regions();

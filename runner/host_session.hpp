@@ -18,6 +18,8 @@
 
 namespace retro::runner {
 
+class Route;
+
 class Sink {
 public:
     virtual ~Sink() = default;
@@ -67,6 +69,7 @@ public:
     bool set_options(const std::map<std::string, std::string>& overrides, std::string* error);
     // Declared keys and their resolved values; nullopt = unset.
     const std::map<std::string, std::optional<std::string>>& options() const { return options_; }
+    void set_route(Route* route) { route_ = route; }
 
     // Lend a GL context: `proc` resolves names against a context the caller
     // keeps current on the core thread for every core call. Before init():
@@ -167,6 +170,7 @@ private:
     AccessoryQueue* accessory_queue(std::uint32_t seat, std::uint32_t slot);
 
     const LoadedCore& core_;
+    Route* route_ = nullptr;
     Sink& sink_;
     rcore_host_api host_{};
     std::uint32_t presentation_width_ = 0, presentation_height_ = 0;

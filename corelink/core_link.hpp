@@ -143,6 +143,7 @@ public:
     ~CoreLink();
 
     bool start(const LaunchSpec& spec, std::string* error);
+    bool restart(const LaunchSpec& spec, std::string* error);
 
     // Handles every message waiting (up to timeout_ms for the first).
     void pump(int timeout_ms = 0);
@@ -154,7 +155,7 @@ public:
     // time; can_grant() says whether the previous one has finished. Nothing is
     // granted while a savestate request is outstanding.
     bool can_grant() const {
-        return state_ == LinkState::Ready && outstanding_ == 0 && !state_pending_;
+        return state_ == LinkState::Ready && outstanding_ == 0 && !state_pending_ && !replay_pending_;
     }
     // Available physical pixels before letterboxing; zeros when unknown.
     bool grant(const rcore_pad pads[RCORE_MAX_SEATS], std::uint32_t width = 0,
@@ -175,6 +176,10 @@ public:
     // The answer, once, when it has arrived. A runner that ends first
     // answers with a failure naming that.
     std::optional<StateResult> take_state_result();
+    bool replays_supported() const;
+    bool request_recording(bool record, const fs::path& path = {});
+    bool replay_pending() const { return replay_pending_; }
+    const ReplayStatusMsg& replay_status() const { return replay_status_; }
 
     // Accessory data (link 2.1, rcore rev 7; docs/CORE_ABI.md "Accessory
     // data"). send_accessory() queues one whole message for the accessory at
@@ -249,6 +254,8 @@ private:
     std::uint32_t front_ = 0; // the triple buffer's initial front slot
     bool have_frame_ = false;
     bool state_pending_ = false;
+    bool replay_pending_ = false;
+    ReplayStatusMsg replay_status_{};
     StateResult state_request_;
     std::optional<StateResult> state_result_;
     std::deque<AccessoryNotify> notifies_;

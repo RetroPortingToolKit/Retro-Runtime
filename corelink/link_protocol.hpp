@@ -45,7 +45,9 @@ constexpr std::uint32_t kProtocolMajor = 2;
 // reads a 2.1 runner's with both fields zero.
 // 2.3: Grant appends the available drawable pixel area (rcore rev 9).
 // 2.4: optional core-owned GPU rings, native handle transfer and release events.
-constexpr std::uint32_t kProtocolMinor = 4;
+// 2.5: between-frame replay recording controls and authoritative status.
+constexpr std::uint32_t kProtocolMinor = 5;
+constexpr bool link_has_replays(std::uint32_t peer_minor) { return peer_minor >= 5; }
 constexpr bool link_has_gpu_frames(std::uint32_t peer_minor) {
     return kProtocolMajor > 2 || peer_minor >= 4;
 }
@@ -154,6 +156,7 @@ enum class Msg : std::uint32_t {
     GpuRing = 10,        // 2.4: metadata plus 3 native handles per image
     GpuFrame = 11,       // accepted GPU picture, before its FrameDone
     GpuUnregister = 12,  // retire a generation after all GPU users finish
+    ReplayStatus = 13,
     // hub -> runner
     SavesFilled = 64, // every region filled from its file; the seats at power-on
     Grant = 65,       // run exactly one frame, with these pads
@@ -164,11 +167,26 @@ enum class Msg : std::uint32_t {
     GpuCapabilities = 70, // 2.4: once after Hello, before core init
     GpuStatus = 71,       // resource ownership events, not capabilities
     StateThumbnail = 72, // 2.4: displayed image observer for the next save
+    ReplayControl = 73,
 };
 
 struct MsgHeader {
     Msg type;
     std::uint32_t size; // whole packet, header included
+};
+
+enum class ReplayState : std::uint32_t { Idle, Recording, Saved, Playing, TakenOver, Failed, Complete, Stopped };
+struct ReplayControlMsg {
+    MsgHeader h;
+    std::uint32_t record; // 1: start at a restored anchor, 0: stop recording
+    char path[4096]; // exclusive destination, never overwrite
+};
+struct ReplayStatusMsg {
+    MsgHeader h;
+    ReplayState state;
+    std::uint64_t fields;
+    char path[4096];
+    char detail[512];
 };
 
 struct GpuCapabilitiesMsg {
