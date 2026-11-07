@@ -14,6 +14,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace retro::runner {
@@ -88,6 +89,9 @@ public:
     void set_presentation_size(std::uint32_t width, std::uint32_t height) {
         presentation_width_ = width && height ? width : 0;
         presentation_height_ = width && height ? height : 0;
+    }
+    std::pair<std::uint32_t,std::uint32_t> presentation_size() const {
+        return {presentation_width_,presentation_height_};
     }
 
     // After load(): allocate every declared region, filled with its erase

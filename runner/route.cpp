@@ -127,6 +127,9 @@ bool Route::open(const std::string& rom, const std::string& package_sha,
             for (const auto& [k,v] : actual) if (!recorded.count(k) || recorded[k] != v) return fail("route identity mismatch: " + k);
             return fail("route identity contains an unsupported key");
         }
+        // Core init/load and anchor restoration may use drawable identity.
+        // The first recorded field can resize, so use the anchor's size.
+        session_.set_presentation_size(boot_.width,boot_.height);
     } else {
         partial_ = args_.record; partial_ += ".partial";
         if (fs::exists(args_.record) || fs::exists(partial_)) return fail("route or partial file already exists");
@@ -144,6 +147,8 @@ bool Route::capture_anchor() {
     if (playback() || !(core_.info->capabilities & RCORE_CAP_SAVESTATE) ||
         !api.serialize_size || !api.serialize || !api.unserialize)
         return fail("this core cannot anchor a replay");
+    const auto [width,height]=session_.presentation_size();
+    boot_.width=width;boot_.height=height;
     const auto size = api.serialize_size();
     if (!size || size > limit/4) return fail("replay anchor is empty or too large");
     anchor_.resize(static_cast<std::size_t>(size));
