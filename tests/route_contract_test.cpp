@@ -5,9 +5,23 @@
 
 using namespace retro::runner;
 namespace {
-void check(bool yes) { if (!yes) { std::cerr << "route contract check failed\n"; std::exit(1); } }
+void check_at(bool yes,int line) { if (!yes) { std::cerr << "route contract check failed at line " << line << '\n'; std::exit(1); } }
+#define check(yes) check_at((yes),__LINE__)
 std::uint64_t digest = 0;
+const rcore_host_api* anchor_host = nullptr;
 std::uint64_t state_hash() { return digest; }
+std::uint64_t anchor_size() { return sizeof digest; }
+rcore_result anchor_write(void* data, std::uint64_t size) {
+    if (!data || size != sizeof digest) return RCORE_ERR_CONTENT;
+    std::memcpy(data,&digest,sizeof digest);return RCORE_OK;
+}
+rcore_result anchor_read(const void* data, std::uint64_t size) {
+    std::uint32_t width=0,height=0;
+    if (!data || size != sizeof digest || !anchor_host ||
+        !anchor_host->presentation_size(anchor_host->host_ctx,&width,&height) ||
+        width != 1440 || height != 900) return RCORE_ERR_CONTENT;
+    std::memcpy(&digest,data,sizeof digest);return RCORE_OK;
+}
 const rcore_option* new_options(std::uint32_t* count) {
     static rcore_option option{};
     option.struct_size=sizeof option;option.key="new_default";option.default_value="off";
@@ -95,5 +109,29 @@ int main(int argc,char** argv) {
     Route compatible(core,reference_session,args,out);check(compatible.open(argv[0],"",".",false));
     args.runner_reference=args.runner;
     Route wrong_reference(core,reference_session,args,out);check(!wrong_reference.open(argv[0],"",".",false));
-    std::cout << "8 seats, 6 axes, clocks, save restoration, state, audio and picture replay pass\n";
+    // The saved anchor's viewport can differ from its first recorded field.
+    // A fresh core must see the saved size before init/load and unserialize.
+    fs::remove(out/"anchor.route");fs::remove(out/"anchor.route.partial");
+    auto anchor_info=info;anchor_info.capabilities|=RCORE_CAP_SAVESTATE;
+    auto anchor_api=api;anchor_api.serialize_size=anchor_size;
+    anchor_api.serialize=anchor_write;anchor_api.unserialize=anchor_read;
+    auto anchor_core=core;anchor_core.info=&anchor_info;anchor_core.api=&anchor_api;
+    TestSink anchor_sink;
+    HostSession anchor_recording(anchor_core,anchor_sink);check(anchor_recording.set_options({},&error));
+    anchor_recording.set_presentation_size(1440,900);
+    RouteArgs anchor_args;anchor_args.runner=fs::absolute(argv[0]);anchor_args.record=out/"anchor.route";
+    Route anchor_recorder(anchor_core,anchor_recording,anchor_args,out);
+    check(anchor_recorder.open(argv[0],"",".",false));anchor_recording.set_route(&anchor_recorder);
+    anchor_host=anchor_recording.host_api();check(anchor_recorder.capture_anchor());
+    drive(anchor_recorder,anchor_recording);
+    HostSession anchor_playing(anchor_core,anchor_sink);check(anchor_playing.set_options({},&error));
+    anchor_sink.noisy=true;
+    anchor_args.play=anchor_args.record;anchor_args.record.clear();
+    Route anchor_player(anchor_core,anchor_playing,anchor_args,out);
+    check(anchor_player.open(argv[0],"",".",false));anchor_playing.set_route(&anchor_player);
+    anchor_host=anchor_playing.host_api();
+    std::uint32_t width=0,height=0;
+    check(anchor_host->presentation_size(anchor_host->host_ctx,&width,&height) && width==1440 && height==900);
+    drive(anchor_player,anchor_playing);
+    std::cout << "8 seats, 6 axes, clocks, save restoration, anchor viewport, state, audio and picture replay pass\n";
 }
