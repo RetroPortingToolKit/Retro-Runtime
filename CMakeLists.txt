@@ -131,6 +131,23 @@ if(RETRO_RUNTIME_TOOLS)
         -DRUNNER=$<TARGET_FILE:retro-core-runner> -DCORE=$<TARGET_FILE:rcore_fake_core>
         -DLINK=$<TARGET_FILE:retro-core-link-test> -DOUT=${CMAKE_CURRENT_BINARY_DIR}/route-integration
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/route_test.cmake)
+    add_test(NAME cpu_target_routes COMMAND ${CMAKE_COMMAND}
+        -DRUNNER=$<TARGET_FILE:retro-core-runner> -DCORE=$<TARGET_FILE:rcore_fake_core>
+        -DLINK=$<TARGET_FILE:retro-core-link-test> -DOUT=${CMAKE_CURRENT_BINARY_DIR}/cpu-target-routes
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/route_test.cmake)
+    set_tests_properties(cpu_target_routes PROPERTIES ENVIRONMENT "FAKE_CORE_CPU_TARGET=2")
+    add_test(NAME cpu_target_link COMMAND ${CMAKE_COMMAND}
+        -DRUNNER=$<TARGET_FILE:retro-core-runner> -DCORE=$<TARGET_FILE:rcore_fake_core>
+        -DLINK_TEST=$<TARGET_FILE:retro-core-link-test> -DROM=${CMAKE_CURRENT_SOURCE_DIR}/LICENSE
+        -DOUT=${CMAKE_CURRENT_BINARY_DIR}/cpu-target-link
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cpu_target_test.cmake)
+    set_tests_properties(cpu_target_link PROPERTIES ENVIRONMENT "FAKE_CORE_CPU_TARGET=1")
+    add_test(NAME cpu_target_refusal COMMAND ${CMAKE_COMMAND}
+        -DRUNNER=$<TARGET_FILE:retro-core-runner> -DCORE=$<TARGET_FILE:rcore_fake_core>
+        -DLINK_TEST=$<TARGET_FILE:retro-core-link-test> -DROM=${CMAKE_CURRENT_SOURCE_DIR}/LICENSE
+        -DOUT=${CMAKE_CURRENT_BINARY_DIR}/cpu-target-refusal -DREFUSE=ON
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cpu_target_test.cmake)
+    set_tests_properties(cpu_target_refusal PROPERTIES ENVIRONMENT "FAKE_CORE_CPU_TARGET=3")
     add_test(NAME route_watch COMMAND ${CMAKE_COMMAND}
         -DRUNNER=$<TARGET_FILE:retro-core-runner> -DCORE=$<TARGET_FILE:rcore_fake_core>
         -DLINK=$<TARGET_FILE:retro-core-link-test> -DOUT=${CMAKE_CURRENT_BINARY_DIR}/route-watch

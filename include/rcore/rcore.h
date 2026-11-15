@@ -48,7 +48,7 @@ extern "C" {
 
 #define RCORE_ABI_MAJOR 0u /* 0 = draft; the first implemented contract is 1 */
 #define RCORE_ABI_MINOR 0u
-#define RCORE_DRAFT_REVISION 12u /* draft-only counter; see docs/CORE_ABI.md */
+#define RCORE_DRAFT_REVISION 13u /* draft-only counter; see docs/CORE_ABI.md */
 
 #if defined(_WIN32)
 #  define RCORE_EXPORT __declspec(dllexport)
@@ -137,6 +137,21 @@ typedef struct rcore_frame {
      * never for netplay. */
     uint64_t game_frame;
 } rcore_frame;
+
+/* Rev 13: optional CPU scanout storage lent by the host. The caller sets
+ * struct_size. On success pixels contains width*height RGBA8 pixels with the
+ * returned stride (at least width*4); no capacity beyond stride*height is
+ * implied. previous_pixels, when non-NULL, is the last published CPU image,
+ * with its own geometry. It is read-only and may differ in size or be absent
+ * after a GPU picture. A recycled writable slot is NOT previous-image history. */
+typedef struct rcore_cpu_video_target {
+    uint32_t struct_size;
+    uint32_t width, height, stride, pixel_format;
+    uint32_t _pad0;
+    void* pixels;
+    const void* previous_pixels;
+    uint32_t previous_width, previous_height, previous_stride, previous_pixel_format;
+} rcore_cpu_video_target;
 
 /* Rev 11: a core-owned export ring, optional on both sides. Capabilities are
  * sampled once before load; release notifications below concern resource
@@ -526,6 +541,21 @@ typedef struct rcore_host_api {
      * presentation-only; never guest input, compatibility identity or saved
      * simulation state. The host must accept legacy cores that ignore it. */
     uint32_t (*video_requested)(void* host_ctx, uint64_t frame_number, uint64_t game_frame);
+    /* --- appended in draft revision 13: optional CPU video target ---
+     * Check struct_size and this pointer before use. Zero/absent means use
+     * ordinary video_submit. All calls and pixel access are on the core thread;
+     * only one loan may be active. On success write only the returned image,
+     * then video_submit with that exact pointer/geometry to publish without a
+     * copy. Writable access ends at video_submit or return from run_frame;
+     * never cache a writable pointer across either boundary. An unsubmitted
+     * loan publishes nothing. After a successful submit its pixels remain
+     * readable (never writable) as previous until the next publication or core
+     * teardown. Before fallback, omitted output, resize or restore, a core
+     * needing persistent scanout history must synchronize its owned history.
+     * Borrowed pixels are presentation-only, never saved simulation state.
+     * No host is required to support this extension. */
+    uint32_t (*video_acquire_cpu)(void* host_ctx, uint32_t width, uint32_t height,
+                                 uint32_t pixel_format, rcore_cpu_video_target* out);
 } rcore_host_api;
 
 /* ------------------------------------------------------------------------ */

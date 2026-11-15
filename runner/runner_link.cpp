@@ -168,6 +168,7 @@ public:
         ring.in_flight[f.image_index] = frame_number;
         last_game_frame = f.game_frame;
         last_gpu_ = true;
+        cpu_loan_ = false;
         return true;
     }
     void gpu_unregister(std::uint64_t generation) override {
@@ -244,18 +245,52 @@ public:
         if (e.kind == RCORE_EVENT_FAULT) ++faults;
     }
 
+    bool acquire_cpu(std::uint32_t width, std::uint32_t height, std::uint32_t format,
+                     rcore_cpu_video_target& out) override {
+        if (cpu_loan_ || !width || !height || format != RCORE_PIXEL_RGBA8 ||
+            width > kMaxFrameWidth || height > kMaxFrameHeight) return false;
+        out.width = width; out.height = height; out.stride = width * 4;
+        out.pixel_format = format;
+        out.pixels = base_ + shm_->frames_offset + std::size_t(back_) * kFrameSlotBytes;
+        if (published_ >= 0 && !last_gpu_) {
+            const FrameInfo& previous = shm_->slot[published_];
+            out.previous_pixels = base_ + shm_->frames_offset +
+                                  std::size_t(published_) * kFrameSlotBytes;
+            out.previous_width = previous.width; out.previous_height = previous.height;
+            out.previous_stride = previous.stride; out.previous_pixel_format = previous.pixel_format;
+        }
+        cpu_loan_width_ = width; cpu_loan_height_ = height;
+        cpu_loan_ = true;
+        return true;
+    }
+    void end_frame() override { cpu_loan_ = false; }
+
     void frame(const rcore_frame& f) override {
         last_gpu_ = false;
-        if (f.pixel_format != RCORE_PIXEL_RGBA8 || f.width > kMaxFrameWidth ||
-            f.height > kMaxFrameHeight) {
+        const bool loan = cpu_loan_;
+        cpu_loan_ = false; // any submission ends writable access
+        if (!f.pixels || !f.width || !f.height || f.pixel_format != RCORE_PIXEL_RGBA8 ||
+            f.width > kMaxFrameWidth || f.height > kMaxFrameHeight || f.stride < f.width * 4) {
             ++bad_frames; // reported at the end of the frame, not mid-core
             return;
         }
         std::uint8_t* dst = base_ + shm_->frames_offset + std::size_t(back_) * kFrameSlotBytes;
         const auto* src = static_cast<const std::uint8_t*>(f.pixels);
         const std::size_t row = std::size_t(f.width) * 4;
-        for (std::uint32_t y = 0; y < f.height; ++y) {
-            std::memcpy(dst + y * row, src + std::size_t(y) * f.stride, row);
+        if (src == dst && loan && f.width == cpu_loan_width_ && f.height == cpu_loan_height_ &&
+            f.stride == row) {
+            // The core filled our exclusively owned back slot. The metadata
+            // and atomic ownership exchange below are the publication.
+        } else {
+            const auto address = reinterpret_cast<std::uintptr_t>(src);
+            const auto back_address = reinterpret_cast<std::uintptr_t>(dst);
+            if (address >= back_address && address < back_address + kFrameSlotBytes) {
+                ++bad_frames; // stale/mismatched loan must not self-copy
+                return;
+            }
+            for (std::uint32_t y = 0; y < f.height; ++y) {
+                std::memcpy(dst + y * row, src + std::size_t(y) * f.stride, row);
+            }
         }
         FrameInfo& info = shm_->slot[back_];
         info.width = f.width;
@@ -367,6 +402,8 @@ private:
     SharedHeader* shm_;
     std::uint8_t* base_;
     std::uint32_t back_ = 2; // the triple buffer's initial back slot
+    bool cpu_loan_ = false;
+    std::uint32_t cpu_loan_width_ = 0, cpu_loan_height_ = 0;
     int published_ = -1;     // the slot last swapped into middle
     std::ofstream log_, events_;
 };
@@ -442,6 +479,7 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         sink.set_gpu_capabilities(offered.caps);
         session.offer_gpu_frames();
     }
+    session.offer_cpu_frames();
     for (const DataAccessory& d : a.data_accessories) session.bind_data_accessory(d.seat, d.slot);
     // 2.1: a hub's AccessoryData, queued for the next granted frame. One
     // arriving for a (seat, slot) nothing is plugged into is dropped and said
@@ -765,6 +803,7 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         auto timed = [&](rcore_result (*fn)()) {
             const Clock::time_point t0 = Clock::now();
             const rcore_result rc = fn();
+            session.end_frame();
             done.work_ns += static_cast<std::uint64_t>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - t0).count());
             return rc;
@@ -828,7 +867,7 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         }
         if (sink.bad_frames) {
             code = exiting(sock, 1, "the core submitted a frame this link cannot carry "
-                                    "(format, or larger than 1024x1024)");
+                                    "(invalid format, geometry, or CPU target)");
             break;
         }
         if (done.result != RCORE_OK) {

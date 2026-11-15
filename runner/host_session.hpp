@@ -27,6 +27,9 @@ public:
     virtual void log(std::uint32_t level, const char* msg) = 0;
     virtual void event(const rcore_event& e) = 0;
     virtual void frame(const rcore_frame& f) = 0;
+    virtual bool acquire_cpu(std::uint32_t, std::uint32_t, std::uint32_t,
+                             rcore_cpu_video_target&) { return false; }
+    virtual void end_frame() {}
     // Current progress, including fields whose pixels are not requested.
     // A core may repeat the same metadata; this is a value, not a counter tick.
     virtual void video_progress(std::uint64_t, std::uint64_t) {}
@@ -86,6 +89,10 @@ public:
     // After link negotiation, before init. Import support/adapter identity is
     // sampled once; callbacks stay absent for CPU-only sinks and older hubs.
     void offer_gpu_frames();
+    // CPU targets use the existing shared frame slots, independently of GPU
+    // import support. Only a sink owning writable storage offers this API.
+    void offer_cpu_frames();
+    void end_frame() { sink_.end_frame(); }
 
     // The host table the core is given. Stable for the session's lifetime.
     const rcore_host_api* host_api() const { return &host_; }
@@ -156,6 +163,8 @@ private:
     static void h_report(void*, const rcore_event*);
     static void h_video(void*, const rcore_frame*);
     static std::uint32_t h_video_requested(void*, std::uint64_t, std::uint64_t);
+    static std::uint32_t h_video_acquire_cpu(void*, std::uint32_t, std::uint32_t,
+                                              std::uint32_t, rcore_cpu_video_target*);
     static void h_audio(void*, const std::int16_t*, std::uint32_t);
     static void h_rate(void*, std::uint32_t);
     static void h_input(void*, std::uint32_t, rcore_pad*);

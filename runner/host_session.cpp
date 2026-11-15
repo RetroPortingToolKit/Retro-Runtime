@@ -51,6 +51,24 @@ void HostSession::offer_gpu_frames() {
     host_.gpu_frames_unregister = h_gpu_unregister;
 }
 
+void HostSession::offer_cpu_frames() {
+    host_.video_acquire_cpu = h_video_acquire_cpu;
+}
+
+std::uint32_t HostSession::h_video_acquire_cpu(void* ctx, std::uint32_t width,
+                                             std::uint32_t height, std::uint32_t format,
+                                             rcore_cpu_video_target* out) {
+    if (!out || out->struct_size < sizeof *out || !width || !height ||
+        format != RCORE_PIXEL_RGBA8 || width > UINT32_MAX / 4 ||
+        std::size_t(height) > SIZE_MAX / (std::size_t(width) * 4)) return 0;
+    auto* s = self(ctx);
+    // Route observers request pictures even when the host does not display.
+    if (!s->video_requested_ && !s->route_) return 0;
+    *out = {};
+    out->struct_size = sizeof *out;
+    return s->sink_.acquire_cpu(width, height, format, *out) ? 1u : 0u;
+}
+
 std::uint32_t HostSession::h_gpu_caps(void* ctx, rcore_gpu_capabilities* out) {
     if (!out || out->struct_size < sizeof *out) return 0;
     *out = self(ctx)->gpu_caps_;

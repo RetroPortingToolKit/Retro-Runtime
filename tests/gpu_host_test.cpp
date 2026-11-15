@@ -3,8 +3,9 @@
 #include <iostream>
 
 using namespace retro::runner;
-static_assert(sizeof(void*)!=8 || sizeof(rcore_host_api)==208);
+static_assert(sizeof(void*)!=8 || sizeof(rcore_host_api)==216);
 static_assert(sizeof(void*)!=8 || offsetof(rcore_host_api,video_requested)==200);
+static_assert(sizeof(void*)!=8 || offsetof(rcore_host_api,video_acquire_cpu)==208);
 void check(bool ok, const char* what) {
     if (!ok) { std::cerr << "FAIL " << what << '\n'; std::exit(1); }
 }
@@ -12,11 +13,15 @@ struct TestSink : Sink {
     bool available = false;
     unsigned samples = 0, registrations = 0, pictures = 0, retires = 0;
     unsigned cpu_pictures = 0, audio_frames = 0, input_polls = 0;
+    unsigned cpu_acquires = 0, field_ends = 0;
     std::uint64_t field = 0, game_frame = 0;
     rcore_gpu_capabilities caps{};
     void log(std::uint32_t, const char*) override {}
     void event(const rcore_event&) override {}
     void frame(const rcore_frame&) override { ++cpu_pictures; }
+    bool acquire_cpu(std::uint32_t, std::uint32_t, std::uint32_t,
+                     rcore_cpu_video_target&) override { ++cpu_acquires; return false; }
+    void end_frame() override { ++field_ends; }
     void video_progress(std::uint64_t f, std::uint64_t g) override { field=f;game_frame=g; }
     void audio(const std::int16_t*, std::uint32_t n) override { audio_frames+=n; }
     void audio_rate(std::uint32_t) override {}
@@ -35,6 +40,26 @@ int main() {
     LoadedCore core;
     TestSink absent;
     HostSession cpu(core, absent);
+    check(!cpu.host_api()->video_acquire_cpu, "unsupported sink keeps optional CPU API absent");
+    cpu.offer_cpu_frames();
+    const auto* ch = cpu.host_api();
+    rcore_cpu_video_target target{}; target.struct_size = sizeof target;
+    check(!ch->video_acquire_cpu(ch->host_ctx,64,48,RCORE_PIXEL_RGBA8,&target) &&
+          absent.cpu_acquires==1 && !target.pixels, "sink refusal retains ordinary submit");
+    --target.struct_size;
+    check(!ch->video_acquire_cpu(ch->host_ctx,64,48,RCORE_PIXEL_RGBA8,&target) &&
+          !ch->video_acquire_cpu(ch->host_ctx,64,48,RCORE_PIXEL_RGBA8,nullptr) &&
+          absent.cpu_acquires==1, "short/null CPU target refused before sink");
+    target.struct_size=sizeof target;
+    check(!ch->video_acquire_cpu(ch->host_ctx,0,48,RCORE_PIXEL_RGBA8,&target) &&
+          !ch->video_acquire_cpu(ch->host_ctx,UINT32_MAX,UINT32_MAX,RCORE_PIXEL_RGBA8,&target) &&
+          !ch->video_acquire_cpu(ch->host_ctx,64,48,99,&target) && absent.cpu_acquires==1,
+          "empty/overflow/unsupported CPU geometry refused");
+    cpu.set_video_requested(false);
+    check(!ch->video_acquire_cpu(ch->host_ctx,64,48,RCORE_PIXEL_RGBA8,&target) &&
+          absent.cpu_acquires==1, "omitted video declines CPU loan");
+    cpu.end_frame();
+    check(absent.field_ends==1, "field return ends any outstanding CPU loan");
     cpu.offer_gpu_frames();
     absent.available = true;
     cpu.offer_gpu_frames();
