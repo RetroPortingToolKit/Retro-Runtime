@@ -1,6 +1,7 @@
 #include "host_session.hpp"
 #include "route.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -58,15 +59,21 @@ void HostSession::offer_cpu_frames() {
 std::uint32_t HostSession::h_video_acquire_cpu(void* ctx, std::uint32_t width,
                                              std::uint32_t height, std::uint32_t format,
                                              rcore_cpu_video_target* out) {
-    if (!out || out->struct_size < sizeof *out || !width || !height ||
+    if (!out || out->struct_size < offsetof(rcore_cpu_video_target, flags) || !width || !height ||
         format != RCORE_PIXEL_RGBA8 || width > UINT32_MAX / 4 ||
         std::size_t(height) > SIZE_MAX / (std::size_t(width) * 4)) return 0;
     auto* s = self(ctx);
     // Route observers request pictures even when the host does not display.
     if (!s->video_requested_ && !s->route_) return 0;
-    *out = {};
-    out->struct_size = sizeof *out;
-    return s->sink_.acquire_cpu(width, height, format, *out) ? 1u : 0u;
+    // The producer always gets our full local object; an older core lends
+    // only the rev13 prefix. Never write our appended flags into its stack.
+    const auto supplied = std::min<std::size_t>(out->struct_size, sizeof *out);
+    rcore_cpu_video_target target{};
+    target.struct_size = static_cast<std::uint32_t>(supplied);
+    if (!s->sink_.acquire_cpu(width, height, format, target)) return 0;
+    target.struct_size = static_cast<std::uint32_t>(supplied);
+    std::memcpy(out, &target, supplied);
+    return 1;
 }
 
 std::uint32_t HostSession::h_gpu_caps(void* ctx, rcore_gpu_capabilities* out) {

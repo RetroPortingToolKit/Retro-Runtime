@@ -98,8 +98,8 @@ void copy_str(char* dst, std::size_t cap, const char* src) {
 // dir (everything) and to the hub (what it shows); input from the grant.
 class LinkSink final : public Sink {
 public:
-    LinkSink(Channel& sock, SharedHeader* shm, const fs::path& out)
-        : sock_(sock), shm_(shm), log_(out / "core.log"), events_(out / "events.tsv") {
+    LinkSink(Channel& sock, SharedHeader* shm, const fs::path& out, bool unpaced)
+        : sock_(sock), shm_(shm), unpaced_(unpaced), log_(out / "core.log"), events_(out / "events.tsv") {
         base_ = reinterpret_cast<std::uint8_t*>(shm);
     }
     ~LinkSink() override {
@@ -169,6 +169,7 @@ public:
         last_game_frame = f.game_frame;
         last_gpu_ = true;
         cpu_loan_ = false;
+        cpu_repeat_ = false;
         return true;
     }
     void gpu_unregister(std::uint64_t generation) override {
@@ -258,21 +259,38 @@ public:
                                   std::size_t(published_) * kFrameSlotBytes;
             out.previous_width = previous.width; out.previous_height = previous.height;
             out.previous_stride = previous.stride; out.previous_pixel_format = previous.pixel_format;
+            if (unpaced_ && out.struct_size >= offsetof(rcore_cpu_video_target, flags) + sizeof out.flags)
+                out.flags = RCORE_CPU_VIDEO_REPEAT_PREVIOUS;
         }
         cpu_loan_width_ = width; cpu_loan_height_ = height;
         cpu_loan_ = true;
+        cpu_repeat_ = (out.flags & RCORE_CPU_VIDEO_REPEAT_PREVIOUS) != 0;
         return true;
     }
-    void end_frame() override { cpu_loan_ = false; }
+    void end_frame() override { cpu_loan_ = cpu_repeat_ = false; }
 
     void frame(const rcore_frame& f) override {
-        last_gpu_ = false;
         const bool loan = cpu_loan_;
+        const bool repeat = cpu_repeat_;
         cpu_loan_ = false; // any submission ends writable access
+        cpu_repeat_ = false;
         if (!f.pixels || !f.width || !f.height || f.pixel_format != RCORE_PIXEL_RGBA8 ||
             f.width > kMaxFrameWidth || f.height > kMaxFrameHeight || f.stride < f.width * 4) {
             ++bad_frames; // reported at the end of the frame, not mid-core
             return;
+        }
+        if (loan && repeat && !last_gpu_ && published_ >= 0) {
+            const FrameInfo& previous = shm_->slot[published_];
+            const auto* pixels = base_ + shm_->frames_offset + std::size_t(published_) * kFrameSlotBytes;
+            if (f.pixels == pixels && f.width == previous.width && f.height == previous.height &&
+                f.stride == previous.stride && f.pixel_format == previous.pixel_format &&
+                f.aspect_num == previous.aspect_num && f.aspect_den == previous.aspect_den) {
+                // HostSession observed this field before commit. Keep both
+                // pixels and metadata untouched: this slot may be hub-owned.
+                last_game_frame = f.struct_size >= offsetof(rcore_frame, game_frame) + sizeof f.game_frame
+                                      ? f.game_frame : 0;
+                return;
+            }
         }
         std::uint8_t* dst = base_ + shm_->frames_offset + std::size_t(back_) * kFrameSlotBytes;
         const auto* src = static_cast<const std::uint8_t*>(f.pixels);
@@ -293,6 +311,7 @@ public:
             }
         }
         FrameInfo& info = shm_->slot[back_];
+        last_gpu_ = false;
         info.width = f.width;
         info.height = f.height;
         info.stride = static_cast<std::uint32_t>(row);
@@ -403,7 +422,9 @@ private:
     std::uint8_t* base_;
     std::uint32_t back_ = 2; // the triple buffer's initial back slot
     bool cpu_loan_ = false;
+    bool cpu_repeat_ = false;
     std::uint32_t cpu_loan_width_ = 0, cpu_loan_height_ = 0;
+    const bool unpaced_;
     int published_ = -1;     // the slot last swapped into middle
     std::ofstream log_, events_;
 };
@@ -467,7 +488,7 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
     const std::size_t frame_done_size =
         link_has_frame_stats(session_minor) ? sizeof(FrameDoneMsg) : kFrameDoneSize21;
 
-    LinkSink sink(sock, shm, a.out);
+    LinkSink sink(sock, shm, a.out, a.unpaced);
     HostSession session(core, sink);
     if (link_has_gpu_frames(session_minor)) {
         std::vector<unsigned char> packet;

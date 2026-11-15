@@ -60,7 +60,8 @@ _Static_assert(sizeof(void*)!=8 || offsetof(rcore_host_api,video_acquire_cpu)==2
 _Static_assert(offsetof(rcore_cpu_video_target,pixels)==24,"CPU target pointer alignment");
 _Static_assert(offsetof(rcore_cpu_video_target,previous_pixels)==24+sizeof(void*),"CPU previous pointer");
 _Static_assert(offsetof(rcore_cpu_video_target,previous_width)==24+2*sizeof(void*),"CPU previous geometry");
-_Static_assert(sizeof(rcore_cpu_video_target)==40+2*sizeof(void*),"CPU target C layout");
+_Static_assert(offsetof(rcore_cpu_video_target,flags)==40+2*sizeof(void*),"CPU target rev13 prefix unchanged");
+_Static_assert(sizeof(rcore_cpu_video_target)==48+2*sizeof(void*),"CPU target C layout");
 
 #if defined(_WIN32)
 #  include <windows.h>
@@ -79,6 +80,8 @@ static unsigned char* g_battery;
 static unsigned long long g_crash_at;
 static unsigned g_cpu_acquired, g_cpu_previous, g_cpu_abandoned;
 static unsigned g_cpu_last_value, g_cpu_last_width, g_cpu_last_height;
+static const void* g_cpu_last_pointer;
+static unsigned g_cpu_repeats;
 
 static rcore_save_region k_regions[1];
 
@@ -285,6 +288,13 @@ static void die_now(void) {
 
 static rcore_result run_frame(void) {
     ++g_frames;
+    const char* cpu_mode = getenv("FAKE_CORE_CPU_TARGET");
+    const int repeat_mode = cpu_mode && atoi(cpu_mode)==4;
+    const unsigned pixel_value = (unsigned)((repeat_mode ? (g_frames+1)/2 : g_frames)&255);
+    if (repeat_mode) {
+        int16_t pcm[4]={(int16_t)g_frames,-(int16_t)g_frames,(int16_t)(g_frames*3),-(int16_t)(g_frames*3)};
+        g_host->audio_push(g_host->host_ctx,pcm,2);
+    }
     if (g_host->struct_size >= offsetof(rcore_host_api, presentation_size) + sizeof(g_host->presentation_size) &&
         g_host->presentation_size) {
         uint32_t w = 99, h = 99, w2 = 0, h2 = 0;
@@ -312,7 +322,7 @@ static rcore_result run_frame(void) {
         g_host->video_requested && !g_host->video_requested(g_host->host_ctx,g_frames,g_frames/2)) {
         return RCORE_OK;
     }
-    memset(g_pixels, (int)(g_frames & 0xff), sizeof g_pixels);
+    memset(g_pixels, (int)pixel_value, sizeof g_pixels);
     rcore_frame f;
     memset(&f, 0, sizeof f);
     f.struct_size = sizeof f;
@@ -326,7 +336,6 @@ static rcore_result run_frame(void) {
     /* Exercise the actual linked runner's owned back slot. Mode1 includes an
      * abandoned field, resize, then an ordinary private-buffer submission;
      * mode2 keeps ordinary pictures for the existing route/recording oracle. */
-    const char* cpu_mode = getenv("FAKE_CORE_CPU_TARGET");
     if (cpu_mode && atoi(cpu_mode) &&
         g_host->struct_size >= offsetof(rcore_host_api,video_acquire_cpu)+sizeof(g_host->video_acquire_cpu) &&
         g_host->video_acquire_cpu) {
@@ -350,7 +359,17 @@ static rcore_result run_frame(void) {
         nested.struct_size=sizeof nested;
         if (g_host->video_acquire_cpu(g_host->host_ctx,width,height,RCORE_PIXEL_RGBA8,&nested))
             return RCORE_ERR_STATE; /* two simultaneous writers are forbidden */
-        memset(out.pixels,(int)(g_frames&255),(size_t)out.stride*out.height);
+        if (repeat_mode && out.struct_size>=offsetof(rcore_cpu_video_target,flags)+sizeof out.flags &&
+            (out.flags&RCORE_CPU_VIDEO_REPEAT_PREVIOUS) && out.previous_pixels &&
+            g_cpu_last_value==pixel_value) {
+            if (out.previous_pixels!=g_cpu_last_pointer) return RCORE_ERR_STATE;
+            f.pixels=out.previous_pixels;
+            ++g_cpu_repeats;
+            g_host->video_submit(g_host->host_ctx,&f);
+            if (((const unsigned char*)f.pixels)[0]!=pixel_value) return RCORE_ERR_STATE;
+            return RCORE_OK;
+        }
+        memset(out.pixels,(int)pixel_value,(size_t)out.stride*out.height);
         if (transitions && g_frames==3) {
             ++g_cpu_abandoned;
             return RCORE_OK; /* next run must acquire again, not publish this */
@@ -359,9 +378,10 @@ static rcore_result run_frame(void) {
             f.width=out.width; f.height=out.height; f.stride=out.stride; f.pixels=out.pixels;
         }
         if (atoi(cpu_mode)==3) f.stride+=4; /* mismatched loan must not self-copy */
-        g_cpu_last_value=(unsigned)(g_frames&255);
+        g_cpu_last_value=pixel_value;
         g_cpu_last_width=f.width; g_cpu_last_height=f.height;
         g_host->video_submit(g_host->host_ctx,&f);
+        g_cpu_last_pointer=f.pixels;
         if (f.pixels==out.pixels && ((const unsigned char*)f.pixels)[0]!=g_cpu_last_value)
             return RCORE_ERR_STATE; /* committed image remains readable */
         return RCORE_OK;
@@ -403,6 +423,8 @@ static void unload(void) {
     if (getenv("FAKE_CORE_CPU_TARGET")) {
         snprintf(line,sizeof line,"FAKE_CPU_TARGET acquired=%u previous=%u abandoned=%u",
                  g_cpu_acquired,g_cpu_previous,g_cpu_abandoned);
+        g_host->log(g_host->host_ctx,RCORE_LOG_INFO,line);
+        snprintf(line,sizeof line,"FAKE_CPU_REPEAT repeats=%u",g_cpu_repeats);
         g_host->log(g_host->host_ctx,RCORE_LOG_INFO,line);
     }
 }

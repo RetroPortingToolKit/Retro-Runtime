@@ -6,6 +6,8 @@ using namespace retro::runner;
 static_assert(sizeof(void*)!=8 || sizeof(rcore_host_api)==216);
 static_assert(sizeof(void*)!=8 || offsetof(rcore_host_api,video_requested)==200);
 static_assert(sizeof(void*)!=8 || offsetof(rcore_host_api,video_acquire_cpu)==208);
+static_assert(sizeof(void*)!=8 || sizeof(rcore_cpu_video_target)==64);
+static_assert(sizeof(void*)!=8 || offsetof(rcore_cpu_video_target,flags)==56);
 void check(bool ok, const char* what) {
     if (!ok) { std::cerr << "FAIL " << what << '\n'; std::exit(1); }
 }
@@ -14,13 +16,21 @@ struct TestSink : Sink {
     unsigned samples = 0, registrations = 0, pictures = 0, retires = 0;
     unsigned cpu_pictures = 0, audio_frames = 0, input_polls = 0;
     unsigned cpu_acquires = 0, field_ends = 0;
+    bool lend_cpu = false;
+    std::uint8_t cpu_pixels[64*48*4]{};
     std::uint64_t field = 0, game_frame = 0;
     rcore_gpu_capabilities caps{};
     void log(std::uint32_t, const char*) override {}
     void event(const rcore_event&) override {}
     void frame(const rcore_frame&) override { ++cpu_pictures; }
-    bool acquire_cpu(std::uint32_t, std::uint32_t, std::uint32_t,
-                     rcore_cpu_video_target&) override { ++cpu_acquires; return false; }
+    bool acquire_cpu(std::uint32_t w, std::uint32_t h, std::uint32_t format,
+                     rcore_cpu_video_target& out) override {
+        ++cpu_acquires;
+        if (!lend_cpu) return false;
+        out.width=w;out.height=h;out.stride=w*4;out.pixel_format=format;
+        out.pixels=cpu_pixels;out.flags=RCORE_CPU_VIDEO_REPEAT_PREVIOUS;
+        return true;
+    }
     void end_frame() override { ++field_ends; }
     void video_progress(std::uint64_t f, std::uint64_t g) override { field=f;game_frame=g; }
     void audio(const std::int16_t*, std::uint32_t n) override { audio_frames+=n; }
@@ -46,7 +56,7 @@ int main() {
     rcore_cpu_video_target target{}; target.struct_size = sizeof target;
     check(!ch->video_acquire_cpu(ch->host_ctx,64,48,RCORE_PIXEL_RGBA8,&target) &&
           absent.cpu_acquires==1 && !target.pixels, "sink refusal retains ordinary submit");
-    --target.struct_size;
+    target.struct_size=offsetof(rcore_cpu_video_target,flags)-1;
     check(!ch->video_acquire_cpu(ch->host_ctx,64,48,RCORE_PIXEL_RGBA8,&target) &&
           !ch->video_acquire_cpu(ch->host_ctx,64,48,RCORE_PIXEL_RGBA8,nullptr) &&
           absent.cpu_acquires==1, "short/null CPU target refused before sink");
@@ -60,6 +70,18 @@ int main() {
           absent.cpu_acquires==1, "omitted video declines CPU loan");
     cpu.end_frame();
     check(absent.field_ends==1, "field return ends any outstanding CPU loan");
+    cpu.set_video_requested(true);
+    absent.lend_cpu=true;
+    target.struct_size=offsetof(rcore_cpu_video_target,flags);
+    target.flags=0xabcddcba;target._pad1=0x98766543;
+    check(ch->video_acquire_cpu(ch->host_ctx,64,48,RCORE_PIXEL_RGBA8,&target) &&
+          target.struct_size==offsetof(rcore_cpu_video_target,flags) && target.pixels==absent.cpu_pixels &&
+          target.flags==0xabcddcba && target._pad1==0x98766543,
+          "older56-byte target prefix has no writes past supplied size");
+    target.struct_size=sizeof target;
+    check(ch->video_acquire_cpu(ch->host_ctx,64,48,RCORE_PIXEL_RGBA8,&target) &&
+          target.struct_size==sizeof target && target.flags==RCORE_CPU_VIDEO_REPEAT_PREVIOUS,
+          "new64-byte target receives appended flags");
     cpu.offer_gpu_frames();
     absent.available = true;
     cpu.offer_gpu_frames();

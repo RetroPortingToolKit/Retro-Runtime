@@ -48,7 +48,7 @@ extern "C" {
 
 #define RCORE_ABI_MAJOR 0u /* 0 = draft; the first implemented contract is 1 */
 #define RCORE_ABI_MINOR 0u
-#define RCORE_DRAFT_REVISION 13u /* draft-only counter; see docs/CORE_ABI.md */
+#define RCORE_DRAFT_REVISION 14u /* draft-only counter; see docs/CORE_ABI.md */
 
 #if defined(_WIN32)
 #  define RCORE_EXPORT __declspec(dllexport)
@@ -144,6 +144,7 @@ typedef struct rcore_frame {
  * implied. previous_pixels, when non-NULL, is the last published CPU image,
  * with its own geometry. It is read-only and may differ in size or be absent
  * after a GPU picture. A recycled writable slot is NOT previous-image history. */
+#define RCORE_CPU_VIDEO_REPEAT_PREVIOUS (1u << 0)
 typedef struct rcore_cpu_video_target {
     uint32_t struct_size;
     uint32_t width, height, stride, pixel_format;
@@ -151,6 +152,15 @@ typedef struct rcore_cpu_video_target {
     void* pixels;
     const void* previous_pixels;
     uint32_t previous_width, previous_height, previous_stride, previous_pixel_format;
+    /* Rev 14: read only when struct_size covers flags. An unpaced host may
+     * advertise REPEAT_PREVIOUS: submit the exact previous_pixels, geometry,
+     * format and unchanged aspect to repeat without copying or republishing.
+     * The submission ends the writable loan and still advances frame progress
+     * and observers. Previous pixels stay read-only at the same address until
+     * the next non-repeat publication or teardown. Other submissions retain
+     * the ordinary publication contract. The rev13 prefix remains accepted. */
+    uint32_t flags;
+    uint32_t _pad1;
 } rcore_cpu_video_target;
 
 /* Rev 11: a core-owned export ring, optional on both sides. Capabilities are

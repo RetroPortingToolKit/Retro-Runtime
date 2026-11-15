@@ -62,6 +62,7 @@ struct LinkArgs {
     fs::path out;            // session dir: core.log, events.tsv, the core's cache_dir
     bool gl = false;
     bool strict = false;
+    bool unpaced = false; // explicit host launch policy, never inferred from timing
     std::map<std::string, std::string> overrides;
     std::optional<fs::path> load_state;
     // --tpakN-rom: the Game Boy cartridge in seat N's Transfer Pak (N = 1-4),

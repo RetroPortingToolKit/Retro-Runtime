@@ -97,6 +97,7 @@ int main(int argc, char** argv) {
     std::uint64_t pcm = 0xcbf29ce484222325ull, audio_frames = 0;
     bool seat0 = true;
     bool presentation_test = false;
+    bool unpaced = false, cpu_repeat_test = false;
     bool expect_route_end = false;
     std::string restart_route;
     std::vector<std::pair<std::uint64_t, std::uint32_t>> script;
@@ -145,6 +146,8 @@ int main(int argc, char** argv) {
         else if (a == "--frames") frames = std::strtoull(val().c_str(), nullptr, 10);
         else if (a == "--video-every") video_every = std::strtoull(val().c_str(), nullptr, 10);
         else if (a == "--pcm-hash") pcm_hash = true;
+        else if (a == "--unpaced") { unpaced = true; spec.extra_args.push_back("--unpaced"); }
+        else if (a == "--cpu-repeat-test") cpu_repeat_test = true;
         else if (a == "--load-state") spec.load_state = utf8_path(val());
         else if (a.size() >= 11 && a.compare(0, 6, "--tpak") == 0 && a[6] >= '1' && a[6] <= '4') {
             const std::size_t seat = static_cast<std::size_t>(a[6] - '1');
@@ -303,6 +306,15 @@ int main(int argc, char** argv) {
         const bool clean_route_end = expect_route_end && link.state()==LinkState::Ended && !link.exit_code();
         if (link.state() != LinkState::Ready && !clean_route_end) ok = false;
         if (link.take_frame()) ++pictures;
+        if (cpu_repeat_test) {
+            const auto* f = link.frame_info();
+            const auto* pixels = link.frame_pixels();
+            const auto published = unpaced && !(k & 1) ? k - 1 : k;
+            if (!f || !pixels || f->frame_number != published || f->width != 64 || f->height != 48 ||
+                link.frame_stats().game_frame != k / 2) die("CPU repeat changed metadata or lost progress");
+            for (std::size_t i = 0; i < std::size_t(f->stride) * f->height; ++i)
+                if (pixels[i] != (k + 1) / 2) die("CPU repeat changed per-field pixels");
+        }
         std::int16_t sink[4096];
         while (const auto n = link.drain_audio(sink, 2048)) {
             audio_frames += n;

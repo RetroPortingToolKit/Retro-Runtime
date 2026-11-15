@@ -11,6 +11,13 @@ from the same-process `--replay-at` save/restore probe below.
 **Status, 2026-09-25:** two modes. **Headless** is described here. **Link**
 (`--link`) is how the hub runs a core in its own window; see `CORE_LINK.md`.
 
+`--unpaced` explicitly marks a link session that does not pace presentation.
+Only such a session offers CPU previous-image repeat without shared-slot
+republication. The default keeps ordinary per-picture publication. Hosts pass
+this through `LaunchSpec.extra_args`; `retro-core-link-test --unpaced` forwards
+it to the runner. Simulation, audio, route recording and frame progress still
+advance on every field.
+
 ## What it does today
 
 1. **Loads the core and computes its identity.** It opens the library once,
