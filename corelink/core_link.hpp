@@ -33,6 +33,8 @@ struct LaunchSpec {
     fs::path session_dir;  // runner.log, core.log, events.tsv, the core's cache
     bool gl = true;
     bool strict = false;
+    // Actual frontend can reconstruct exact horizontal pairs before filtering.
+    bool cpu_pixel_pairs = false;
     rcore_gpu_capabilities gpu_capabilities{}; // actual local import support, sampled once
     std::map<std::string, std::string> options;
     std::optional<fs::path> load_state;

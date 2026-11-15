@@ -289,7 +289,8 @@ static void die_now(void) {
 static rcore_result run_frame(void) {
     ++g_frames;
     const char* cpu_mode = getenv("FAKE_CORE_CPU_TARGET");
-    const int repeat_mode = cpu_mode && atoi(cpu_mode)==4;
+    const int pairs_mode = cpu_mode && atoi(cpu_mode)==5;
+    const int repeat_mode = cpu_mode && (atoi(cpu_mode)==4 || pairs_mode);
     const unsigned pixel_value = (unsigned)((repeat_mode ? (g_frames+1)/2 : g_frames)&255);
     if (repeat_mode) {
         int16_t pcm[4]={(int16_t)g_frames,-(int16_t)g_frames,(int16_t)(g_frames*3),-(int16_t)(g_frames*3)};
@@ -333,10 +334,45 @@ static rcore_result run_frame(void) {
     f.pixels = g_pixels;
     f.frame_number = g_frames;
     f.game_frame = g_frames / 2; /* rev 8: a game drawing every other frame */
+    if (pairs_mode) {
+        unsigned x,y,c;
+        for(y=0;y<H;++y) for(x=0;x<W;++x) for(c=0;c<4;++c)
+            g_pixels[(y*W+x)*4+c]=(unsigned char)(pixel_value+x/2+3*y+c);
+        if (g_host->struct_size >= offsetof(rcore_host_api,video_acquire_cpu)+sizeof(g_host->video_acquire_cpu) &&
+            g_host->video_acquire_cpu) {
+            rcore_cpu_video_target target={0}; target.struct_size=sizeof target;
+            if(g_host->video_acquire_cpu(g_host->host_ctx,W/2,H,RCORE_PIXEL_RGBA8_X2,&target)) {
+                if(!target.pixels || target.width!=W/2 || target.height!=H || target.stride!=W*2 ||
+                    target.pixel_format!=RCORE_PIXEL_RGBA8_X2) return RCORE_ERR_STATE;
+                ++g_cpu_acquired;
+                if(g_frames==3) {
+                    /* Abandon a valid compact loan for an ordinary private
+                     * frame: models full history that cannot be paired. */
+                    g_cpu_last_value=pixel_value;
+                    g_host->video_submit(g_host->host_ctx,&f);
+                    return RCORE_OK;
+                }
+                f.width=W/2; f.stride=W*2; f.pixel_format=RCORE_PIXEL_RGBA8_X2;
+                if(target.previous_pixels && target.previous_width==W/2 && target.previous_height==H &&
+                    target.previous_pixel_format==RCORE_PIXEL_RGBA8_X2 &&
+                    (target.flags&RCORE_CPU_VIDEO_REPEAT_PREVIOUS) && g_cpu_last_value==pixel_value) {
+                    f.pixels=target.previous_pixels; ++g_cpu_repeats;
+                } else {
+                    for(y=0;y<H;++y) for(x=0;x<W/2;++x)
+                        memcpy((unsigned char*)target.pixels+y*target.stride+x*4,g_pixels+(y*W+x*2)*4,4);
+                    f.pixels=target.pixels;
+                }
+                g_cpu_last_value=pixel_value;
+                g_host->video_submit(g_host->host_ctx,&f);
+                return RCORE_OK;
+            }
+        }
+        /* Unsupported/recording hosts receive the canonical full-width image. */
+    }
     /* Exercise the actual linked runner's owned back slot. Mode1 includes an
      * abandoned field, resize, then an ordinary private-buffer submission;
      * mode2 keeps ordinary pictures for the existing route/recording oracle. */
-    if (cpu_mode && atoi(cpu_mode) &&
+    if (cpu_mode && atoi(cpu_mode) && !pairs_mode &&
         g_host->struct_size >= offsetof(rcore_host_api,video_acquire_cpu)+sizeof(g_host->video_acquire_cpu) &&
         g_host->video_acquire_cpu) {
         const int transitions = atoi(cpu_mode)==1;

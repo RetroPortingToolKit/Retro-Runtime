@@ -47,7 +47,9 @@ constexpr std::uint32_t kProtocolMajor = 2;
 // 2.4: optional core-owned GPU rings, native handle transfer and release events.
 // 2.5: between-frame replay recording controls and authoritative status.
 // 2.6: Grant appends presentation-only permission to omit unobserved video.
-constexpr std::uint32_t kProtocolMinor = 6;
+// 2.7: optional Grant flag enables exact RGBA8 horizontal-pair reconstruction.
+constexpr std::uint32_t kProtocolMinor = 7;
+constexpr bool link_has_cpu_pixel_pairs(std::uint32_t peer_minor) { return peer_minor >= 7; }
 constexpr bool link_has_video_demand(std::uint32_t peer_minor) { return peer_minor >= 6; }
 constexpr bool link_has_replays(std::uint32_t peer_minor) { return peer_minor >= 5; }
 constexpr bool link_has_gpu_frames(std::uint32_t peer_minor) {
@@ -306,6 +308,7 @@ struct GrantMsg {
 constexpr std::size_t kGrantSize22 = 240;
 constexpr std::size_t kGrantSize25 = 248;
 constexpr std::uint32_t kGrantSkipVideo = 1;
+constexpr std::uint32_t kGrantCpuPixelPairs = 2; // optional logical-width2 RGBA8 reconstruction
 
 struct EmptyMsg {
     MsgHeader h;

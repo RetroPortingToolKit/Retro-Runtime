@@ -248,7 +248,9 @@ public:
 
     bool acquire_cpu(std::uint32_t width, std::uint32_t height, std::uint32_t format,
                      rcore_cpu_video_target& out) override {
-        if (cpu_loan_ || !width || !height || format != RCORE_PIXEL_RGBA8 ||
+        if (cpu_loan_ || !width || !height ||
+            (format != RCORE_PIXEL_RGBA8 && format != RCORE_PIXEL_RGBA8_X2) ||
+            (format == RCORE_PIXEL_RGBA8_X2 && (!cpu_pixel_pairs || width > kMaxFrameWidth / 2)) ||
             width > kMaxFrameWidth || height > kMaxFrameHeight) return false;
         out.width = width; out.height = height; out.stride = width * 4;
         out.pixel_format = format;
@@ -262,7 +264,7 @@ public:
             if (unpaced_ && out.struct_size >= offsetof(rcore_cpu_video_target, flags) + sizeof out.flags)
                 out.flags = RCORE_CPU_VIDEO_REPEAT_PREVIOUS;
         }
-        cpu_loan_width_ = width; cpu_loan_height_ = height;
+        cpu_loan_width_ = width; cpu_loan_height_ = height; cpu_loan_format_ = format;
         cpu_loan_ = true;
         cpu_repeat_ = (out.flags & RCORE_CPU_VIDEO_REPEAT_PREVIOUS) != 0;
         return true;
@@ -274,12 +276,15 @@ public:
         const bool repeat = cpu_repeat_;
         cpu_loan_ = false; // any submission ends writable access
         cpu_repeat_ = false;
-        if (!f.pixels || !f.width || !f.height || f.pixel_format != RCORE_PIXEL_RGBA8 ||
+        if (!f.pixels || !f.width || !f.height ||
+            (f.pixel_format != RCORE_PIXEL_RGBA8 && f.pixel_format != RCORE_PIXEL_RGBA8_X2) ||
+            (f.pixel_format == RCORE_PIXEL_RGBA8_X2 && (!cpu_pixel_pairs || !loan ||
+                cpu_loan_format_ != f.pixel_format || f.width > kMaxFrameWidth / 2)) ||
             f.width > kMaxFrameWidth || f.height > kMaxFrameHeight || f.stride < f.width * 4) {
             ++bad_frames; // reported at the end of the frame, not mid-core
             return;
         }
-        if (loan && repeat && !last_gpu_ && published_ >= 0) {
+        if (loan && repeat && f.pixel_format == cpu_loan_format_ && !last_gpu_ && published_ >= 0) {
             const FrameInfo& previous = shm_->slot[published_];
             const auto* pixels = base_ + shm_->frames_offset + std::size_t(published_) * kFrameSlotBytes;
             if (f.pixels == pixels && f.width == previous.width && f.height == previous.height &&
@@ -296,7 +301,7 @@ public:
         const auto* src = static_cast<const std::uint8_t*>(f.pixels);
         const std::size_t row = std::size_t(f.width) * 4;
         if (src == dst && loan && f.width == cpu_loan_width_ && f.height == cpu_loan_height_ &&
-            f.stride == row) {
+            f.stride == row && f.pixel_format == cpu_loan_format_) {
             // The core filled our exclusively owned back slot. The metadata
             // and atomic ownership exchange below are the publication.
         } else {
@@ -336,9 +341,17 @@ public:
         if (last_gpu_) return {}; // a CPU slot from an earlier field is stale
         if (published_ < 0) return {};
         const FrameInfo& info = shm_->slot[published_];
-        return state::make_thumbnail(base_ + shm_->frames_offset +
-                                         std::size_t(published_) * kFrameSlotBytes,
-                                     info.width, info.height, info.stride);
+        const auto* pixels = base_ + shm_->frames_offset + std::size_t(published_) * kFrameSlotBytes;
+        if (info.pixel_format == RCORE_PIXEL_RGBA8_X2) {
+            const auto width = info.width * 2;
+            std::vector<std::uint8_t> expanded(std::size_t(width) * info.height * 4);
+            for (std::uint32_t y = 0; y < info.height; ++y)
+                for (std::uint32_t x = 0; x < width; ++x)
+                    std::memcpy(expanded.data() + (std::size_t(y) * width + x) * 4,
+                                pixels + std::size_t(y) * info.stride + (x / 2) * 4, 4);
+            return state::make_thumbnail(expanded.data(), width, info.height, width * 4);
+        }
+        return state::make_thumbnail(pixels, info.width, info.height, info.stride);
     }
 
     void take_thumbnail(const std::vector<unsigned char>& packet) {
@@ -396,6 +409,7 @@ public:
     std::uint64_t last_game_frame = 0;
     std::uint32_t faults = 0;
     std::uint32_t bad_frames = 0;
+    bool cpu_pixel_pairs = false;
     // The core's stated frame rate (set_frame_rate), 0/0 until it states one.
     std::uint32_t rate_num = 0, rate_den = 0;
 
@@ -423,7 +437,7 @@ private:
     std::uint32_t back_ = 2; // the triple buffer's initial back slot
     bool cpu_loan_ = false;
     bool cpu_repeat_ = false;
-    std::uint32_t cpu_loan_width_ = 0, cpu_loan_height_ = 0;
+    std::uint32_t cpu_loan_width_ = 0, cpu_loan_height_ = 0, cpu_loan_format_ = 0;
     const bool unpaced_;
     int published_ = -1;     // the slot last swapped into middle
     std::ofstream log_, events_;
@@ -809,6 +823,8 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         sink.frame_number = g.frame_number;
         session.set_video_requested(!link_has_video_demand(session_minor) || buf.size() < sizeof g
                                     || !(g.flags & kGrantSkipVideo));
+        sink.cpu_pixel_pairs = link_has_cpu_pixel_pairs(session_minor) && buf.size() >= sizeof g
+                                && (g.flags & kGrantCpuPixelPairs);
         session.set_presentation_size(g.presentation_width, g.presentation_height);
         // Everything that arrived before this grant is the frame's accessory
         // sequence; a message that arrives while the frame runs waits for the

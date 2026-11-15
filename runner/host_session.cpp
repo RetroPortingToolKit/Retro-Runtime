@@ -60,9 +60,12 @@ std::uint32_t HostSession::h_video_acquire_cpu(void* ctx, std::uint32_t width,
                                              std::uint32_t height, std::uint32_t format,
                                              rcore_cpu_video_target* out) {
     if (!out || out->struct_size < offsetof(rcore_cpu_video_target, flags) || !width || !height ||
-        format != RCORE_PIXEL_RGBA8 || width > UINT32_MAX / 4 ||
+        (format != RCORE_PIXEL_RGBA8 && format != RCORE_PIXEL_RGBA8_X2) ||
+        (format == RCORE_PIXEL_RGBA8_X2 && width > UINT32_MAX / 2) || width > UINT32_MAX / 4 ||
         std::size_t(height) > SIZE_MAX / (std::size_t(width) * 4)) return 0;
     auto* s = self(ctx);
+    // Replay observers retain the canonical full-width byte oracle.
+    if (format == RCORE_PIXEL_RGBA8_X2 && s->route_) return 0;
     // Route observers request pictures even when the host does not display.
     if (!s->video_requested_ && !s->route_) return 0;
     // The producer always gets our full local object; an older core lends

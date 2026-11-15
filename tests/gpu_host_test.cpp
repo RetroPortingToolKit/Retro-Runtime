@@ -82,6 +82,9 @@ int main() {
     check(ch->video_acquire_cpu(ch->host_ctx,64,48,RCORE_PIXEL_RGBA8,&target) &&
           target.struct_size==sizeof target && target.flags==RCORE_CPU_VIDEO_REPEAT_PREVIOUS,
           "new64-byte target receives appended flags");
+    check(ch->video_acquire_cpu(ch->host_ctx,32,48,RCORE_PIXEL_RGBA8_X2,&target) &&
+          target.pixel_format==RCORE_PIXEL_RGBA8_X2 && target.width==32,
+          "explicit compact format reaches a supporting sink without layout changes");
     cpu.offer_gpu_frames();
     absent.available = true;
     cpu.offer_gpu_frames();

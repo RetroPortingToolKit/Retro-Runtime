@@ -308,6 +308,8 @@ bool CoreLink::grant(const rcore_pad pads[RCORE_MAX_SEATS], std::uint32_t width,
         g.presentation_height = height;
     }
     if (!video_requested) g.flags |= kGrantSkipVideo;
+    if (spec_.cpu_pixel_pairs && link_has_cpu_pixel_pairs(identity_.protocol_minor))
+        g.flags |= kGrantCpuPixelPairs;
     const auto bytes = link_has_video_demand(identity_.protocol_minor) ? sizeof(g)
         : link_has_presentation_size(identity_.protocol_minor) ? kGrantSize25 : kGrantSize22;
     if (!send_msg_sized(channel_, g, bytes)) return false;

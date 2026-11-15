@@ -48,7 +48,7 @@ extern "C" {
 
 #define RCORE_ABI_MAJOR 0u /* 0 = draft; the first implemented contract is 1 */
 #define RCORE_ABI_MINOR 0u
-#define RCORE_DRAFT_REVISION 14u /* draft-only counter; see docs/CORE_ABI.md */
+#define RCORE_DRAFT_REVISION 15u /* draft-only counter; see docs/CORE_ABI.md */
 
 #if defined(_WIN32)
 #  define RCORE_EXPORT __declspec(dllexport)
@@ -117,6 +117,11 @@ typedef struct rcore_core_info {
 /* ------------------------------------------------------------------------ */
 
 #define RCORE_PIXEL_RGBA8          1u /* bytes R,G,B,A in memory order */
+/* Rev15: stored RGBA8 pixels, each replicated exactly twice horizontally
+ * BEFORE display filtering. Logical width=2*width; stride describes stored
+ * bytes. Submit only after a successful acquire requesting this format;
+ * unsupported hosts refuse it so the core submits ordinary RGBA8 instead. */
+#define RCORE_PIXEL_RGBA8_X2       2u
 
 typedef struct rcore_frame {
     uint32_t struct_size;

@@ -97,7 +97,7 @@ int main(int argc, char** argv) {
     std::uint64_t pcm = 0xcbf29ce484222325ull, audio_frames = 0;
     bool seat0 = true;
     bool presentation_test = false;
-    bool unpaced = false, cpu_repeat_test = false;
+    bool unpaced = false, cpu_repeat_test = false, cpu_pairs_test = false;
     bool expect_route_end = false;
     std::string restart_route;
     std::vector<std::pair<std::uint64_t, std::uint32_t>> script;
@@ -146,8 +146,10 @@ int main(int argc, char** argv) {
         else if (a == "--frames") frames = std::strtoull(val().c_str(), nullptr, 10);
         else if (a == "--video-every") video_every = std::strtoull(val().c_str(), nullptr, 10);
         else if (a == "--pcm-hash") pcm_hash = true;
+        else if (a == "--cpu-pixel-pairs") spec.cpu_pixel_pairs = true;
         else if (a == "--unpaced") { unpaced = true; spec.extra_args.push_back("--unpaced"); }
         else if (a == "--cpu-repeat-test") cpu_repeat_test = true;
+        else if (a == "--cpu-pixel-pairs-test") cpu_pairs_test = true;
         else if (a == "--load-state") spec.load_state = utf8_path(val());
         else if (a.size() >= 11 && a.compare(0, 6, "--tpak") == 0 && a[6] >= '1' && a[6] <= '4') {
             const std::size_t seat = static_cast<std::size_t>(a[6] - '1');
@@ -315,6 +317,17 @@ int main(int argc, char** argv) {
             for (std::size_t i = 0; i < std::size_t(f->stride) * f->height; ++i)
                 if (pixels[i] != (k + 1) / 2) die("CPU repeat changed per-field pixels");
         }
+        if (cpu_pairs_test) {
+            const auto* f=link.frame_info(); const auto* px=link.frame_pixels();
+            if(!f || !px || f->height!=48 || link.frame_stats().game_frame!=k/2)
+                die("CPU pixel pairs lost progress/geometry");
+            const auto repeat=f->pixel_format==RCORE_PIXEL_RGBA8_X2 ? 2u : 1u;
+            if(f->width*repeat!=64 || f->stride!=f->width*4)
+                die("CPU pixel pairs changed logical geometry");
+            for(unsigned y=0;y<48;++y) for(unsigned x=0;x<64;++x) for(unsigned c=0;c<4;++c)
+                if(px[y*f->stride+(x/repeat)*4+c]!=static_cast<unsigned char>((k+1)/2+x/2+3*y+c))
+                    die("CPU pixel pairs changed a logical pixel");
+        }
         std::int16_t sink[4096];
         while (const auto n = link.drain_audio(sink, 2048)) {
             audio_frames += n;
@@ -375,11 +388,12 @@ int main(int argc, char** argv) {
     // ---- the artifacts headless mode writes ----------------------------------
     if (const FrameInfo* f = link.frame_info()) {
         std::ofstream shot(spec.session_dir / "shot.ppm", std::ios::binary);
-        shot << "P6\n" << f->width << ' ' << f->height << "\n255\n";
+        const std::uint32_t repeat = f->pixel_format == RCORE_PIXEL_RGBA8_X2 ? 2 : 1;
+        shot << "P6\n" << f->width * repeat << ' ' << f->height << "\n255\n";
         const std::uint8_t* px = link.frame_pixels();
-        for (std::size_t i = 0; i < std::size_t(f->width) * f->height; ++i) {
-            shot.write(reinterpret_cast<const char*>(px + i * 4), 3);
-        }
+        for (std::uint32_t y = 0; y < f->height; ++y)
+            for (std::uint32_t x = 0; x < f->width * repeat; ++x)
+                shot.write(reinterpret_cast<const char*>(px + std::size_t(y) * f->stride + (x / repeat) * 4), 3);
     }
     {
         std::ifstream log(spec.session_dir / "core.log");

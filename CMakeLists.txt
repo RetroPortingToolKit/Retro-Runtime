@@ -154,6 +154,12 @@ if(RETRO_RUNTIME_TOOLS)
         -DOUT=${CMAKE_CURRENT_BINARY_DIR}/cpu-repeat-link
         -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cpu_repeat_test.cmake)
     set_tests_properties(cpu_repeat_link PROPERTIES ENVIRONMENT "FAKE_CORE_CPU_TARGET=4")
+    add_test(NAME cpu_pixel_pairs_link COMMAND ${CMAKE_COMMAND}
+        -DRUNNER=$<TARGET_FILE:retro-core-runner> -DCORE=$<TARGET_FILE:rcore_fake_core>
+        -DLINK_TEST=$<TARGET_FILE:retro-core-link-test> -DROM=${CMAKE_CURRENT_SOURCE_DIR}/LICENSE
+        -DOUT=${CMAKE_CURRENT_BINARY_DIR}/cpu-pixel-pairs-link
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cpu_pixel_pairs_test.cmake)
+    set_tests_properties(cpu_pixel_pairs_link PROPERTIES ENVIRONMENT "FAKE_CORE_CPU_TARGET=5")
     add_test(NAME route_watch COMMAND ${CMAKE_COMMAND}
         -DRUNNER=$<TARGET_FILE:retro-core-runner> -DCORE=$<TARGET_FILE:rcore_fake_core>
         -DLINK=$<TARGET_FILE:retro-core-link-test> -DOUT=${CMAKE_CURRENT_BINARY_DIR}/route-watch

@@ -23,5 +23,11 @@ int main() {
     if (!as_msg(bytes, got, kGrantSize22) || got.flags || got.presentation_width != 2560) return 7;
     bytes.resize(kGrantSize22);
     if (!as_msg(bytes, got, kGrantSize22) || got.flags || got.presentation_width) return 8;
+    if(link_has_cpu_pixel_pairs(6) || !link_has_cpu_pixel_pairs(7)) return 9;
+    sent.flags=kGrantSkipVideo|kGrantCpuPixelPairs;
+    bytes.resize(sizeof sent); std::memcpy(bytes.data(),&sent,sizeof sent);
+    if(!as_msg(bytes,got,kGrantSize22) || !(got.flags&kGrantCpuPixelPairs) || !(got.flags&kGrantSkipVideo)) return 10;
+    bytes.resize(kGrantSize25);
+    if(!as_msg(bytes,got,kGrantSize22) || got.flags) return 11;
     return 0;
 }
