@@ -160,6 +160,9 @@ public:
     // Available physical pixels before letterboxing; zeros when unknown.
     bool grant(const rcore_pad pads[RCORE_MAX_SEATS], std::uint32_t width = 0,
                std::uint32_t height = 0);
+    // Presentation-only permission; old runners/cores may still send video.
+    bool grant(const rcore_pad pads[RCORE_MAX_SEATS], std::uint32_t width,
+               std::uint32_t height, bool video_requested);
     std::uint64_t frames_granted() const { return granted_; }
     std::uint64_t frames_done() const { return done_; }
     const FrameStats& frame_stats() const { return stats_; }

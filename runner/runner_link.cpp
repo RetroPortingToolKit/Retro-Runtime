@@ -106,6 +106,9 @@ public:
         for (auto& item : gpu_rings_) close_gpu_handles(item.second);
     }
     void set_gpu_capabilities(const rcore_gpu_capabilities& caps) { gpu_caps_ = caps; }
+    void video_progress(std::uint64_t, std::uint64_t game_frame) override {
+        last_game_frame = game_frame;
+    }
     bool gpu_capabilities(rcore_gpu_capabilities& out) override {
         out = gpu_caps_;
         return out.handle_types && out.sync_types;
@@ -745,6 +748,8 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
             }
         }
         sink.frame_number = g.frame_number;
+        session.set_video_requested(!link_has_video_demand(session_minor) || buf.size() < sizeof g
+                                    || !(g.flags & kGrantSkipVideo));
         session.set_presentation_size(g.presentation_width, g.presentation_height);
         // Everything that arrived before this grant is the frame's accessory
         // sequence; a message that arrives while the frame runs waits for the

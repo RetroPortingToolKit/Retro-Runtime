@@ -48,7 +48,7 @@ extern "C" {
 
 #define RCORE_ABI_MAJOR 0u /* 0 = draft; the first implemented contract is 1 */
 #define RCORE_ABI_MINOR 0u
-#define RCORE_DRAFT_REVISION 11u /* draft-only counter; see docs/CORE_ABI.md */
+#define RCORE_DRAFT_REVISION 12u /* draft-only counter; see docs/CORE_ABI.md */
 
 #if defined(_WIN32)
 #  define RCORE_EXPORT __declspec(dllexport)
@@ -516,6 +516,16 @@ typedef struct rcore_host_api {
      * the replacement ring. The core keeps memory alive until retirement,
      * except unload: the host's independent handle references outlive it. */
     void (*gpu_frames_unregister)(void* host_ctx, uint64_t generation);
+    /* --- appended in draft revision 12: optional video demand ---
+     * Called on the core thread with current field/picture progress. Return
+     * zero to permit omitting this field's CPU/GPU video output, nonzero to
+     * request it. Absent means every picture is requested. This is permission,
+     * not an instruction to skip emulation: input, audio, interrupts, device
+     * progress and state observers must retain their normal behavior. Internal
+     * video observers may still require a picture. Stable for the field and
+     * presentation-only; never guest input, compatibility identity or saved
+     * simulation state. The host must accept legacy cores that ignore it. */
+    uint32_t (*video_requested)(void* host_ctx, uint64_t frame_number, uint64_t game_frame);
 } rcore_host_api;
 
 /* ------------------------------------------------------------------------ */

@@ -3,19 +3,24 @@
 #include <iostream>
 
 using namespace retro::runner;
+static_assert(sizeof(void*)!=8 || sizeof(rcore_host_api)==208);
+static_assert(sizeof(void*)!=8 || offsetof(rcore_host_api,video_requested)==200);
 void check(bool ok, const char* what) {
     if (!ok) { std::cerr << "FAIL " << what << '\n'; std::exit(1); }
 }
 struct TestSink : Sink {
     bool available = false;
     unsigned samples = 0, registrations = 0, pictures = 0, retires = 0;
+    unsigned cpu_pictures = 0, audio_frames = 0, input_polls = 0;
+    std::uint64_t field = 0, game_frame = 0;
     rcore_gpu_capabilities caps{};
     void log(std::uint32_t, const char*) override {}
     void event(const rcore_event&) override {}
-    void frame(const rcore_frame&) override {}
-    void audio(const std::int16_t*, std::uint32_t) override {}
+    void frame(const rcore_frame&) override { ++cpu_pictures; }
+    void video_progress(std::uint64_t f, std::uint64_t g) override { field=f;game_frame=g; }
+    void audio(const std::int16_t*, std::uint32_t n) override { audio_frames+=n; }
     void audio_rate(std::uint32_t) override {}
-    void input(std::uint32_t, rcore_pad&) override {}
+    void input(std::uint32_t, rcore_pad&) override { ++input_polls; }
     bool gpu_capabilities(rcore_gpu_capabilities& out) override {
         ++samples; out = caps; return available;
     }
@@ -106,5 +111,19 @@ int main() {
     check(!h->video_submit_gpu(h->host_ctx, &frame) && sink.pictures == 1, "invalid slot refused");
     h->gpu_frames_unregister(h->host_ctx, 0); h->gpu_frames_unregister(h->host_ctx, 42);
     check(sink.retires == 1, "one retirement forwarded");
+    check(h->video_requested && h->video_requested(h->host_ctx, 41, 17), "legacy demand defaults to every picture");
+    gpu.set_video_requested(false);
+    check(!h->video_requested(h->host_ctx, 42, 18) && sink.field==42 && sink.game_frame==18,
+          "omitted image retains field/picture progress");
+    frame.image_index=0;
+    check(h->video_submit_gpu(h->host_ctx,&frame) && sink.pictures==2, "legacy GPU publication retains ownership protocol despite optional demand");
+    rcore_frame cpu_frame{};cpu_frame.struct_size=sizeof cpu_frame;cpu_frame.frame_number=42;cpu_frame.game_frame=18;
+    h->video_submit(h->host_ctx,&cpu_frame);
+    check(sink.cpu_pictures==0, "legacy core CPU pixels may be discarded");
+    std::int16_t pcm[4]{};h->audio_push(h->host_ctx,pcm,2);
+    rcore_pad pad{};pad.struct_size=sizeof pad;h->input_get(h->host_ctx,0,&pad);
+    check(sink.audio_frames==2 && sink.input_polls==1, "video demand never suppresses audio or input");
+    gpu.set_video_requested(true);h->video_submit(h->host_ctx,&cpu_frame);
+    check(sink.cpu_pictures==1 && h->video_requested(h->host_ctx,43,19), "video can resume at next field");
     std::cout << "GPU host contract: fixed offer, adapter and geometry refusal, CPU fallback PASS\n";
 }

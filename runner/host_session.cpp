@@ -17,6 +17,7 @@ HostSession::HostSession(const LoadedCore& core, Sink& sink) : core_(core), sink
     host_.log = h_log;
     host_.report = h_report;
     host_.video_submit = h_video;
+    host_.video_requested = h_video_requested;
     host_.audio_push = h_audio;
     host_.set_audio_rate = h_rate;
     host_.input_get = h_input;
@@ -102,6 +103,10 @@ std::uint32_t HostSession::h_gpu_released(void* ctx, std::uint64_t generation,
 std::uint32_t HostSession::h_gpu_frame(void* ctx, const rcore_gpu_frame* frame) {
     if (!frame || frame->struct_size < sizeof *frame || !frame->generation ||
         frame->image_index >= RCORE_GPU_MAX_IMAGES) return 0;
+    self(ctx)->sink_.video_progress(frame->frame_number, frame->game_frame);
+    // Legacy cores may ignore demand. Complete the existing GPU ownership
+    // protocol if they publish: a ready binary semaphore cannot be discarded
+    // and reused as though a consumer had waited for it.
     if (self(ctx)->route_) self(ctx)->route_->gpu_video();
     return self(ctx)->sink_.gpu_frame(*frame) ? 1u : 0u;
 }
@@ -243,7 +248,19 @@ void HostSession::h_report(void* ctx, const rcore_event* e) {
 
 void HostSession::h_video(void* ctx, const rcore_frame* f) {
     if (f && self(ctx)->route_) self(ctx)->route_->video(*f);
-    if (f) self(ctx)->sink_.frame(*f);
+    if (f) {
+        auto* s = self(ctx);
+        s->sink_.video_progress(f->frame_number,
+            f->struct_size >= offsetof(rcore_frame, game_frame) + sizeof f->game_frame ? f->game_frame : 0);
+        if (s->video_requested_ || s->route_) s->sink_.frame(*f);
+    }
+}
+
+std::uint32_t HostSession::h_video_requested(void* ctx, std::uint64_t frame, std::uint64_t picture) {
+    auto* s = self(ctx);
+    s->sink_.video_progress(frame, picture);
+    // Routes/recordings observe per-field pictures; never suppress those.
+    return s->video_requested_ || s->route_ != nullptr;
 }
 
 void HostSession::h_audio(void* ctx, const std::int16_t* s, std::uint32_t n) {

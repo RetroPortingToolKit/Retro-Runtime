@@ -86,6 +86,7 @@ int main(int argc, char** argv) {
     LaunchSpec spec;
     spec.gl = false;
     std::uint64_t frames = 60;
+    std::uint64_t video_every = 1, pictures = 0;
     bool seat0 = true;
     bool presentation_test = false;
     bool expect_route_end = false;
@@ -134,6 +135,7 @@ int main(int argc, char** argv) {
         else if (a == "--title-dir") spec.title_dir = utf8_path(val());
         else if (a == "--out") spec.session_dir = utf8_path(val());
         else if (a == "--frames") frames = std::strtoull(val().c_str(), nullptr, 10);
+        else if (a == "--video-every") video_every = std::strtoull(val().c_str(), nullptr, 10);
         else if (a == "--load-state") spec.load_state = utf8_path(val());
         else if (a.size() >= 11 && a.compare(0, 6, "--tpak") == 0 && a[6] >= '1' && a[6] <= '4') {
             const std::size_t seat = static_cast<std::size_t>(a[6] - '1');
@@ -277,7 +279,8 @@ int main(int argc, char** argv) {
         // Fixture exercises resize, unavailable/minimized, then recovery.
         const std::uint32_t pw = presentation_test && k != 3 ? (k == 1 ? 1280 : 2560) : 0;
         const std::uint32_t ph = presentation_test && k != 3 ? (k == 1 ? 720 : 1080) : 0;
-        if (!link.grant(pads, pw, ph)) {
+        const bool video_requested = k==frames || (video_every && k%video_every==0);
+        if (!link.grant(pads, pw, ph, video_requested)) {
             if (expect_route_end) {
                 link.pump(100);
                 if (link.state()==LinkState::Ended && !link.exit_code()) break;
@@ -288,7 +291,7 @@ int main(int argc, char** argv) {
         print_notifies();
         const bool clean_route_end = expect_route_end && link.state()==LinkState::Ended && !link.exit_code();
         if (link.state() != LinkState::Ready && !clean_route_end) ok = false;
-        link.take_frame();
+        if (link.take_frame()) ++pictures;
         std::int16_t sink[4096];
         while (link.drain_audio(sink, 2048)) {
         }
@@ -366,6 +369,7 @@ int main(int argc, char** argv) {
         std::printf("picture: first byte %u\n", unsigned(link.frame_pixels()[0]));
     }
     // 2.2: what the overlay's readout is made of.
+    std::printf("pictures received: %llu\n",static_cast<unsigned long long>(pictures));
     std::printf("frame stats: game %llu work %s\n",
                 static_cast<unsigned long long>(link.frame_stats().game_frame),
                 link.frame_stats().work_ns ? "measured" : "none");

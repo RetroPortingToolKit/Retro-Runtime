@@ -54,6 +54,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+_Static_assert(sizeof(void*)!=8 || sizeof(rcore_host_api)==208,"rev12 host size");
+_Static_assert(sizeof(void*)!=8 || offsetof(rcore_host_api,video_requested)==200,"rev11 prefix unchanged");
+
 #if defined(_WIN32)
 #  include <windows.h>
 #else
@@ -298,6 +301,10 @@ static rcore_result run_frame(void) {
 #endif
     if (!g_battery) g_battery = (unsigned char*)g_host->save_memory(g_host->host_ctx, "battery");
     if (g_battery) g_battery[g_frames % 64] = (unsigned char)(g_frames & 0xff);
+    if (g_host->struct_size >= offsetof(rcore_host_api,video_requested)+sizeof(g_host->video_requested) &&
+        g_host->video_requested && !g_host->video_requested(g_host->host_ctx,g_frames,g_frames/2)) {
+        return RCORE_OK;
+    }
     memset(g_pixels, (int)(g_frames & 0xff), sizeof g_pixels);
     rcore_frame f;
     memset(&f, 0, sizeof f);
