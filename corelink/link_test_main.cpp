@@ -41,7 +41,9 @@ using namespace retro::corelink;
 namespace {
 constexpr std::uint32_t kLeft = 1u << 20, kRight = 1u << 21,
                         kUp = 1u << 22, kDown = 1u << 23;
-constexpr std::uint32_t kStick = kLeft | kRight | kUp | kDown;
+constexpr std::uint32_t kRLeft = 1u << 24, kRRight = 1u << 25,
+                        kRUp = 1u << 26, kRDown = 1u << 27;
+constexpr std::uint32_t kStick = kLeft | kRight | kUp | kDown | kRLeft | kRRight | kRUp | kRDown;
 
 [[noreturn]] void die(const std::string& m) {
     std::fprintf(stderr, "retro-core-link-test: %s\n", m.c_str());
@@ -70,6 +72,10 @@ std::uint32_t script_buttons(const std::string& s) {
         else if (t == "right") b |= kRight;
         else if (t == "up") b |= kUp;
         else if (t == "down") b |= kDown;
+        else if (t == "rleft") b |= kRLeft;
+        else if (t == "rright") b |= kRRight;
+        else if (t == "rup") b |= kRUp;
+        else if (t == "rdown") b |= kRDown;
         else die("--input-script: unknown button '" + t + "'");
         if (plus == std::string::npos) break;
         start = plus + 1;
@@ -87,6 +93,8 @@ int main(int argc, char** argv) {
     spec.gl = false;
     std::uint64_t frames = 60;
     std::uint64_t video_every = 1, pictures = 0;
+    bool pcm_hash = false;
+    std::uint64_t pcm = 0xcbf29ce484222325ull, audio_frames = 0;
     bool seat0 = true;
     bool presentation_test = false;
     bool expect_route_end = false;
@@ -136,6 +144,7 @@ int main(int argc, char** argv) {
         else if (a == "--out") spec.session_dir = utf8_path(val());
         else if (a == "--frames") frames = std::strtoull(val().c_str(), nullptr, 10);
         else if (a == "--video-every") video_every = std::strtoull(val().c_str(), nullptr, 10);
+        else if (a == "--pcm-hash") pcm_hash = true;
         else if (a == "--load-state") spec.load_state = utf8_path(val());
         else if (a.size() >= 11 && a.compare(0, 6, "--tpak") == 0 && a[6] >= '1' && a[6] <= '4') {
             const std::size_t seat = static_cast<std::size_t>(a[6] - '1');
@@ -275,6 +284,8 @@ int main(int argc, char** argv) {
             pads[0].buttons &= ~kStick;
             pads[0].axes[RCORE_AXIS_LX] = held & kLeft ? -32767 : held & kRight ? 32767 : 0;
             pads[0].axes[RCORE_AXIS_LY] = held & kUp ? 32767 : held & kDown ? -32767 : 0;
+            pads[0].axes[RCORE_AXIS_RX] = held & kRLeft ? -32767 : held & kRRight ? 32767 : 0;
+            pads[0].axes[RCORE_AXIS_RY] = held & kRUp ? 32767 : held & kRDown ? -32767 : 0;
         }
         // Fixture exercises resize, unavailable/minimized, then recovery.
         const std::uint32_t pw = presentation_test && k != 3 ? (k == 1 ? 1280 : 2560) : 0;
@@ -293,7 +304,13 @@ int main(int argc, char** argv) {
         if (link.state() != LinkState::Ready && !clean_route_end) ok = false;
         if (link.take_frame()) ++pictures;
         std::int16_t sink[4096];
-        while (link.drain_audio(sink, 2048)) {
+        while (const auto n = link.drain_audio(sink, 2048)) {
+            audio_frames += n;
+            if (pcm_hash) for (std::size_t i=0;i<n*2;++i) {
+                const auto v=static_cast<std::uint16_t>(sink[i]);
+                pcm=(pcm^(v&255u))*0x100000001b3ull;
+                pcm=(pcm^(v>>8))*0x100000001b3ull;
+            }
         }
         if (clean_route_end) break;
         for (const StateOp& op : record_ops) {
@@ -370,6 +387,8 @@ int main(int argc, char** argv) {
     }
     // 2.2: what the overlay's readout is made of.
     std::printf("pictures received: %llu\n",static_cast<unsigned long long>(pictures));
+    if (pcm_hash) std::printf("PCM_HASH %016llx over %llu samples\n",
+        static_cast<unsigned long long>(pcm),static_cast<unsigned long long>(audio_frames*2));
     std::printf("frame stats: game %llu work %s\n",
                 static_cast<unsigned long long>(link.frame_stats().game_frame),
                 link.frame_stats().work_ns ? "measured" : "none");
