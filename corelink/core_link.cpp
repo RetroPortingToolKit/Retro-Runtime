@@ -293,6 +293,11 @@ void CoreLink::handle_packet(const std::vector<unsigned char>& buf,
 }
 
 bool CoreLink::grant(const rcore_pad pads[RCORE_MAX_SEATS], std::uint32_t width, std::uint32_t height) {
+    return grant(pads,width,height,true);
+}
+
+bool CoreLink::grant(const rcore_pad pads[RCORE_MAX_SEATS], std::uint32_t width, std::uint32_t height,
+                     bool video_requested) {
     if (!can_grant()) return false;
     GrantMsg g{};
     g.h.type = Msg::Grant;
@@ -302,7 +307,11 @@ bool CoreLink::grant(const rcore_pad pads[RCORE_MAX_SEATS], std::uint32_t width,
         g.presentation_width = width;
         g.presentation_height = height;
     }
-    const auto bytes = link_has_presentation_size(identity_.protocol_minor) ? sizeof(g) : kGrantSize22;
+    if (!video_requested) g.flags |= kGrantSkipVideo;
+    if (spec_.cpu_pixel_pairs && link_has_cpu_pixel_pairs(identity_.protocol_minor))
+        g.flags |= kGrantCpuPixelPairs;
+    const auto bytes = link_has_video_demand(identity_.protocol_minor) ? sizeof(g)
+        : link_has_presentation_size(identity_.protocol_minor) ? kGrantSize25 : kGrantSize22;
     if (!send_msg_sized(channel_, g, bytes)) return false;
     ++granted_;
     ++outstanding_;

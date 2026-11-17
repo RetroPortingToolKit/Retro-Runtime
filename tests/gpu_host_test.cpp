@@ -3,19 +3,39 @@
 #include <iostream>
 
 using namespace retro::runner;
+static_assert(sizeof(void*)!=8 || sizeof(rcore_host_api)==216);
+static_assert(sizeof(void*)!=8 || offsetof(rcore_host_api,video_requested)==200);
+static_assert(sizeof(void*)!=8 || offsetof(rcore_host_api,video_acquire_cpu)==208);
+static_assert(sizeof(void*)!=8 || sizeof(rcore_cpu_video_target)==64);
+static_assert(sizeof(void*)!=8 || offsetof(rcore_cpu_video_target,flags)==56);
 void check(bool ok, const char* what) {
     if (!ok) { std::cerr << "FAIL " << what << '\n'; std::exit(1); }
 }
 struct TestSink : Sink {
     bool available = false;
     unsigned samples = 0, registrations = 0, pictures = 0, retires = 0;
+    unsigned cpu_pictures = 0, audio_frames = 0, input_polls = 0;
+    unsigned cpu_acquires = 0, field_ends = 0;
+    bool lend_cpu = false;
+    std::uint8_t cpu_pixels[64*48*4]{};
+    std::uint64_t field = 0, game_frame = 0;
     rcore_gpu_capabilities caps{};
     void log(std::uint32_t, const char*) override {}
     void event(const rcore_event&) override {}
-    void frame(const rcore_frame&) override {}
-    void audio(const std::int16_t*, std::uint32_t) override {}
+    void frame(const rcore_frame&) override { ++cpu_pictures; }
+    bool acquire_cpu(std::uint32_t w, std::uint32_t h, std::uint32_t format,
+                     rcore_cpu_video_target& out) override {
+        ++cpu_acquires;
+        if (!lend_cpu) return false;
+        out.width=w;out.height=h;out.stride=w*4;out.pixel_format=format;
+        out.pixels=cpu_pixels;out.flags=RCORE_CPU_VIDEO_REPEAT_PREVIOUS;
+        return true;
+    }
+    void end_frame() override { ++field_ends; }
+    void video_progress(std::uint64_t f, std::uint64_t g) override { field=f;game_frame=g; }
+    void audio(const std::int16_t*, std::uint32_t n) override { audio_frames+=n; }
     void audio_rate(std::uint32_t) override {}
-    void input(std::uint32_t, rcore_pad&) override {}
+    void input(std::uint32_t, rcore_pad&) override { ++input_polls; }
     bool gpu_capabilities(rcore_gpu_capabilities& out) override {
         ++samples; out = caps; return available;
     }
@@ -30,6 +50,41 @@ int main() {
     LoadedCore core;
     TestSink absent;
     HostSession cpu(core, absent);
+    check(!cpu.host_api()->video_acquire_cpu, "unsupported sink keeps optional CPU API absent");
+    cpu.offer_cpu_frames();
+    const auto* ch = cpu.host_api();
+    rcore_cpu_video_target target{}; target.struct_size = sizeof target;
+    check(!ch->video_acquire_cpu(ch->host_ctx,64,48,RCORE_PIXEL_RGBA8,&target) &&
+          absent.cpu_acquires==1 && !target.pixels, "sink refusal retains ordinary submit");
+    target.struct_size=offsetof(rcore_cpu_video_target,flags)-1;
+    check(!ch->video_acquire_cpu(ch->host_ctx,64,48,RCORE_PIXEL_RGBA8,&target) &&
+          !ch->video_acquire_cpu(ch->host_ctx,64,48,RCORE_PIXEL_RGBA8,nullptr) &&
+          absent.cpu_acquires==1, "short/null CPU target refused before sink");
+    target.struct_size=sizeof target;
+    check(!ch->video_acquire_cpu(ch->host_ctx,0,48,RCORE_PIXEL_RGBA8,&target) &&
+          !ch->video_acquire_cpu(ch->host_ctx,UINT32_MAX,UINT32_MAX,RCORE_PIXEL_RGBA8,&target) &&
+          !ch->video_acquire_cpu(ch->host_ctx,64,48,99,&target) && absent.cpu_acquires==1,
+          "empty/overflow/unsupported CPU geometry refused");
+    cpu.set_video_requested(false);
+    check(!ch->video_acquire_cpu(ch->host_ctx,64,48,RCORE_PIXEL_RGBA8,&target) &&
+          absent.cpu_acquires==1, "omitted video declines CPU loan");
+    cpu.end_frame();
+    check(absent.field_ends==1, "field return ends any outstanding CPU loan");
+    cpu.set_video_requested(true);
+    absent.lend_cpu=true;
+    target.struct_size=offsetof(rcore_cpu_video_target,flags);
+    target.flags=0xabcddcba;target._pad1=0x98766543;
+    check(ch->video_acquire_cpu(ch->host_ctx,64,48,RCORE_PIXEL_RGBA8,&target) &&
+          target.struct_size==offsetof(rcore_cpu_video_target,flags) && target.pixels==absent.cpu_pixels &&
+          target.flags==0xabcddcba && target._pad1==0x98766543,
+          "older56-byte target prefix has no writes past supplied size");
+    target.struct_size=sizeof target;
+    check(ch->video_acquire_cpu(ch->host_ctx,64,48,RCORE_PIXEL_RGBA8,&target) &&
+          target.struct_size==sizeof target && target.flags==RCORE_CPU_VIDEO_REPEAT_PREVIOUS,
+          "new64-byte target receives appended flags");
+    check(ch->video_acquire_cpu(ch->host_ctx,32,48,RCORE_PIXEL_RGBA8_X2,&target) &&
+          target.pixel_format==RCORE_PIXEL_RGBA8_X2 && target.width==32,
+          "explicit compact format reaches a supporting sink without layout changes");
     cpu.offer_gpu_frames();
     absent.available = true;
     cpu.offer_gpu_frames();
@@ -106,5 +161,19 @@ int main() {
     check(!h->video_submit_gpu(h->host_ctx, &frame) && sink.pictures == 1, "invalid slot refused");
     h->gpu_frames_unregister(h->host_ctx, 0); h->gpu_frames_unregister(h->host_ctx, 42);
     check(sink.retires == 1, "one retirement forwarded");
+    check(h->video_requested && h->video_requested(h->host_ctx, 41, 17), "legacy demand defaults to every picture");
+    gpu.set_video_requested(false);
+    check(!h->video_requested(h->host_ctx, 42, 18) && sink.field==42 && sink.game_frame==18,
+          "omitted image retains field/picture progress");
+    frame.image_index=0;
+    check(h->video_submit_gpu(h->host_ctx,&frame) && sink.pictures==2, "legacy GPU publication retains ownership protocol despite optional demand");
+    rcore_frame cpu_frame{};cpu_frame.struct_size=sizeof cpu_frame;cpu_frame.frame_number=42;cpu_frame.game_frame=18;
+    h->video_submit(h->host_ctx,&cpu_frame);
+    check(sink.cpu_pictures==0, "legacy core CPU pixels may be discarded");
+    std::int16_t pcm[4]{};h->audio_push(h->host_ctx,pcm,2);
+    rcore_pad pad{};pad.struct_size=sizeof pad;h->input_get(h->host_ctx,0,&pad);
+    check(sink.audio_frames==2 && sink.input_polls==1, "video demand never suppresses audio or input");
+    gpu.set_video_requested(true);h->video_submit(h->host_ctx,&cpu_frame);
+    check(sink.cpu_pictures==1 && h->video_requested(h->host_ctx,43,19), "video can resume at next field");
     std::cout << "GPU host contract: fixed offer, adapter and geometry refusal, CPU fallback PASS\n";
 }

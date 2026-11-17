@@ -106,7 +106,7 @@ jobs:
             runner: ubuntu-22.04-arm
           # One universal binary; its x86_64 slice is run under Rosetta.
           - platform: macos-universal
-            runner: macos-14
+            runner: macos-15
           - platform: windows-x86_64
             runner: windows-2022
     runs-on: ${{ matrix.runner }}

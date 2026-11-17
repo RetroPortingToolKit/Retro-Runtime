@@ -41,7 +41,9 @@ using namespace retro::corelink;
 namespace {
 constexpr std::uint32_t kLeft = 1u << 20, kRight = 1u << 21,
                         kUp = 1u << 22, kDown = 1u << 23;
-constexpr std::uint32_t kStick = kLeft | kRight | kUp | kDown;
+constexpr std::uint32_t kRLeft = 1u << 24, kRRight = 1u << 25,
+                        kRUp = 1u << 26, kRDown = 1u << 27;
+constexpr std::uint32_t kStick = kLeft | kRight | kUp | kDown | kRLeft | kRRight | kRUp | kRDown;
 
 [[noreturn]] void die(const std::string& m) {
     std::fprintf(stderr, "retro-core-link-test: %s\n", m.c_str());
@@ -70,6 +72,10 @@ std::uint32_t script_buttons(const std::string& s) {
         else if (t == "right") b |= kRight;
         else if (t == "up") b |= kUp;
         else if (t == "down") b |= kDown;
+        else if (t == "rleft") b |= kRLeft;
+        else if (t == "rright") b |= kRRight;
+        else if (t == "rup") b |= kRUp;
+        else if (t == "rdown") b |= kRDown;
         else die("--input-script: unknown button '" + t + "'");
         if (plus == std::string::npos) break;
         start = plus + 1;
@@ -86,8 +92,12 @@ int main(int argc, char** argv) {
     LaunchSpec spec;
     spec.gl = false;
     std::uint64_t frames = 60;
+    std::uint64_t video_every = 1, pictures = 0;
+    bool pcm_hash = false;
+    std::uint64_t pcm = 0xcbf29ce484222325ull, audio_frames = 0;
     bool seat0 = true;
     bool presentation_test = false;
+    bool unpaced = false, cpu_repeat_test = false, cpu_pairs_test = false;
     bool expect_route_end = false;
     std::string restart_route;
     std::vector<std::pair<std::uint64_t, std::uint32_t>> script;
@@ -134,6 +144,12 @@ int main(int argc, char** argv) {
         else if (a == "--title-dir") spec.title_dir = utf8_path(val());
         else if (a == "--out") spec.session_dir = utf8_path(val());
         else if (a == "--frames") frames = std::strtoull(val().c_str(), nullptr, 10);
+        else if (a == "--video-every") video_every = std::strtoull(val().c_str(), nullptr, 10);
+        else if (a == "--pcm-hash") pcm_hash = true;
+        else if (a == "--cpu-pixel-pairs") spec.cpu_pixel_pairs = true;
+        else if (a == "--unpaced") { unpaced = true; spec.extra_args.push_back("--unpaced"); }
+        else if (a == "--cpu-repeat-test") cpu_repeat_test = true;
+        else if (a == "--cpu-pixel-pairs-test") cpu_pairs_test = true;
         else if (a == "--load-state") spec.load_state = utf8_path(val());
         else if (a.size() >= 11 && a.compare(0, 6, "--tpak") == 0 && a[6] >= '1' && a[6] <= '4') {
             const std::size_t seat = static_cast<std::size_t>(a[6] - '1');
@@ -273,11 +289,14 @@ int main(int argc, char** argv) {
             pads[0].buttons &= ~kStick;
             pads[0].axes[RCORE_AXIS_LX] = held & kLeft ? -32767 : held & kRight ? 32767 : 0;
             pads[0].axes[RCORE_AXIS_LY] = held & kUp ? 32767 : held & kDown ? -32767 : 0;
+            pads[0].axes[RCORE_AXIS_RX] = held & kRLeft ? -32767 : held & kRRight ? 32767 : 0;
+            pads[0].axes[RCORE_AXIS_RY] = held & kRUp ? 32767 : held & kRDown ? -32767 : 0;
         }
         // Fixture exercises resize, unavailable/minimized, then recovery.
         const std::uint32_t pw = presentation_test && k != 3 ? (k == 1 ? 1280 : 2560) : 0;
         const std::uint32_t ph = presentation_test && k != 3 ? (k == 1 ? 720 : 1080) : 0;
-        if (!link.grant(pads, pw, ph)) {
+        const bool video_requested = k==frames || (video_every && k%video_every==0);
+        if (!link.grant(pads, pw, ph, video_requested)) {
             if (expect_route_end) {
                 link.pump(100);
                 if (link.state()==LinkState::Ended && !link.exit_code()) break;
@@ -288,9 +307,35 @@ int main(int argc, char** argv) {
         print_notifies();
         const bool clean_route_end = expect_route_end && link.state()==LinkState::Ended && !link.exit_code();
         if (link.state() != LinkState::Ready && !clean_route_end) ok = false;
-        link.take_frame();
+        if (link.take_frame()) ++pictures;
+        if (cpu_repeat_test) {
+            const auto* f = link.frame_info();
+            const auto* pixels = link.frame_pixels();
+            const auto published = unpaced && !(k & 1) ? k - 1 : k;
+            if (!f || !pixels || f->frame_number != published || f->width != 64 || f->height != 48 ||
+                link.frame_stats().game_frame != k / 2) die("CPU repeat changed metadata or lost progress");
+            for (std::size_t i = 0; i < std::size_t(f->stride) * f->height; ++i)
+                if (pixels[i] != (k + 1) / 2) die("CPU repeat changed per-field pixels");
+        }
+        if (cpu_pairs_test) {
+            const auto* f=link.frame_info(); const auto* px=link.frame_pixels();
+            if(!f || !px || f->height!=48 || link.frame_stats().game_frame!=k/2)
+                die("CPU pixel pairs lost progress/geometry");
+            const auto repeat=f->pixel_format==RCORE_PIXEL_RGBA8_X2 ? 2u : 1u;
+            if(f->width*repeat!=64 || f->stride!=f->width*4)
+                die("CPU pixel pairs changed logical geometry");
+            for(unsigned y=0;y<48;++y) for(unsigned x=0;x<64;++x) for(unsigned c=0;c<4;++c)
+                if(px[y*f->stride+(x/repeat)*4+c]!=static_cast<unsigned char>((k+1)/2+x/2+3*y+c))
+                    die("CPU pixel pairs changed a logical pixel");
+        }
         std::int16_t sink[4096];
-        while (link.drain_audio(sink, 2048)) {
+        while (const auto n = link.drain_audio(sink, 2048)) {
+            audio_frames += n;
+            if (pcm_hash) for (std::size_t i=0;i<n*2;++i) {
+                const auto v=static_cast<std::uint16_t>(sink[i]);
+                pcm=(pcm^(v&255u))*0x100000001b3ull;
+                pcm=(pcm^(v>>8))*0x100000001b3ull;
+            }
         }
         if (clean_route_end) break;
         for (const StateOp& op : record_ops) {
@@ -343,11 +388,12 @@ int main(int argc, char** argv) {
     // ---- the artifacts headless mode writes ----------------------------------
     if (const FrameInfo* f = link.frame_info()) {
         std::ofstream shot(spec.session_dir / "shot.ppm", std::ios::binary);
-        shot << "P6\n" << f->width << ' ' << f->height << "\n255\n";
+        const std::uint32_t repeat = f->pixel_format == RCORE_PIXEL_RGBA8_X2 ? 2 : 1;
+        shot << "P6\n" << f->width * repeat << ' ' << f->height << "\n255\n";
         const std::uint8_t* px = link.frame_pixels();
-        for (std::size_t i = 0; i < std::size_t(f->width) * f->height; ++i) {
-            shot.write(reinterpret_cast<const char*>(px + i * 4), 3);
-        }
+        for (std::uint32_t y = 0; y < f->height; ++y)
+            for (std::uint32_t x = 0; x < f->width * repeat; ++x)
+                shot.write(reinterpret_cast<const char*>(px + std::size_t(y) * f->stride + (x / repeat) * 4), 3);
     }
     {
         std::ifstream log(spec.session_dir / "core.log");
@@ -366,6 +412,9 @@ int main(int argc, char** argv) {
         std::printf("picture: first byte %u\n", unsigned(link.frame_pixels()[0]));
     }
     // 2.2: what the overlay's readout is made of.
+    std::printf("pictures received: %llu\n",static_cast<unsigned long long>(pictures));
+    if (pcm_hash) std::printf("PCM_HASH %016llx over %llu samples\n",
+        static_cast<unsigned long long>(pcm),static_cast<unsigned long long>(audio_frames*2));
     std::printf("frame stats: game %llu work %s\n",
                 static_cast<unsigned long long>(link.frame_stats().game_frame),
                 link.frame_stats().work_ns ? "measured" : "none");

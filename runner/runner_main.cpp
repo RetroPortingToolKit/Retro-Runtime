@@ -424,7 +424,7 @@ int main(int argc, char** argv) {
     std::array<bool, retro::runner::kVruSeats> vru_seats{};
     std::optional<fs::path> accessory_script;
     std::string link_handles;
-    bool gl = false, strict = false, seat0 = true, list_options = false, link = false;
+    bool gl = false, strict = false, seat0 = true, list_options = false, link = false, unpaced = false;
     bool describe = false;
     std::optional<std::uint64_t> replay_at;
     RouteArgs route_args;
@@ -482,6 +482,7 @@ int main(int argc, char** argv) {
         else if (a == "--link") link = true;
         else if (a == "--link-handles") link_handles = val();
         else if (a == "--strict") strict = true;
+        else if (a == "--unpaced") unpaced = true;
         else if (a == "--no-seats") seat0 = false;
         else if (a == "--list-options") list_options = true;
         else if (a == "--describe") describe = true;
@@ -679,6 +680,7 @@ int main(int argc, char** argv) {
         la.out = out;
         la.gl = gl;
         la.strict = strict;
+        la.unpaced = unpaced;
         la.overrides = overrides;
         la.load_state = load_state;
         la.tpak_roms = tpak_roms;

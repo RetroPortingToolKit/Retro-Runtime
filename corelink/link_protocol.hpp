@@ -46,7 +46,11 @@ constexpr std::uint32_t kProtocolMajor = 2;
 // 2.3: Grant appends the available drawable pixel area (rcore rev 9).
 // 2.4: optional core-owned GPU rings, native handle transfer and release events.
 // 2.5: between-frame replay recording controls and authoritative status.
-constexpr std::uint32_t kProtocolMinor = 5;
+// 2.6: Grant appends presentation-only permission to omit unobserved video.
+// 2.7: optional Grant flag enables exact RGBA8 horizontal-pair reconstruction.
+constexpr std::uint32_t kProtocolMinor = 7;
+constexpr bool link_has_cpu_pixel_pairs(std::uint32_t peer_minor) { return peer_minor >= 7; }
+constexpr bool link_has_video_demand(std::uint32_t peer_minor) { return peer_minor >= 6; }
 constexpr bool link_has_replays(std::uint32_t peer_minor) { return peer_minor >= 5; }
 constexpr bool link_has_gpu_frames(std::uint32_t peer_minor) {
     return kProtocolMajor > 2 || peer_minor >= 4;
@@ -299,8 +303,12 @@ struct GrantMsg {
     rcore_pad pads[RCORE_MAX_SEATS];
     // 2.3: before letterboxing; both zero means unavailable.
     std::uint32_t presentation_width, presentation_height;
+    std::uint32_t flags, _pad26;
 };
 constexpr std::size_t kGrantSize22 = 240;
+constexpr std::size_t kGrantSize25 = 248;
+constexpr std::uint32_t kGrantSkipVideo = 1;
+constexpr std::uint32_t kGrantCpuPixelPairs = 2; // optional logical-width2 RGBA8 reconstruction
 
 struct EmptyMsg {
     MsgHeader h;
@@ -432,7 +440,7 @@ static_assert(offsetof(ExitingMsg, reason) == 12, "ExitingMsg::reason");
 static_assert(sizeof(SavesFilledMsg) == 232 && alignof(SavesFilledMsg) == 4, "SavesFilledMsg");
 static_assert(offsetof(SavesFilledMsg, h) == 0, "SavesFilledMsg::h");
 static_assert(offsetof(SavesFilledMsg, pads) == 8, "SavesFilledMsg::pads");
-static_assert(sizeof(GrantMsg) == 248 && alignof(GrantMsg) == 8, "GrantMsg");
+static_assert(sizeof(GrantMsg) == 256 && alignof(GrantMsg) == 8, "GrantMsg");
 static_assert(offsetof(GrantMsg, h) == 0, "GrantMsg::h");
 static_assert(offsetof(GrantMsg, frame_number) == 8, "GrantMsg::frame_number");
 static_assert(offsetof(GrantMsg, pads) == 16, "GrantMsg::pads");

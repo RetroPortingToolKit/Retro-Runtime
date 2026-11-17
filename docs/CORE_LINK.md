@@ -13,6 +13,15 @@ protocol is the same on all three.
 
 ## Transport
 
+**2.6 (2026-11-15):** `Grant` appends flags and padding (256 bytes).
+`kGrantSkipVideo` permits omitting CPU/GPU video for that field; zero flags
+retain every picture. The runner exposes rcore revision 12 `video_requested`
+and retains field/game-picture progress even without pixels. Input, audio,
+simulation and `FrameDone` still occur on every grant. Recording and replay
+routes request every picture. Peers speaking 2.3–2.5 receive the unchanged
+248-byte grant; peers through 2.2 receive 240 bytes. Older cores may ignore
+the hint. This is local presentation policy, not serialized or netplay input.
+
 **2.4 (2026-10-19):** optional GPU ring/frame/retirement messages 10–12,
 startup capabilities 70, ownership status 71 and explicit save thumbnail 72.
 The existing shared frame-region layout is unchanged. These messages require

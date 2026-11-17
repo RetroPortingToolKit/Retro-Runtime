@@ -27,6 +27,12 @@ public:
     virtual void log(std::uint32_t level, const char* msg) = 0;
     virtual void event(const rcore_event& e) = 0;
     virtual void frame(const rcore_frame& f) = 0;
+    virtual bool acquire_cpu(std::uint32_t, std::uint32_t, std::uint32_t,
+                             rcore_cpu_video_target&) { return false; }
+    virtual void end_frame() {}
+    // Current progress, including fields whose pixels are not requested.
+    // A core may repeat the same metadata; this is a value, not a counter tick.
+    virtual void video_progress(std::uint64_t, std::uint64_t) {}
     virtual void audio(const std::int16_t* samples, std::uint32_t frames) = 0;
     virtual void audio_rate(std::uint32_t hz) = 0;
     // The state of `seat` for the frame being run. Must be identical for every
@@ -83,9 +89,14 @@ public:
     // After link negotiation, before init. Import support/adapter identity is
     // sampled once; callbacks stay absent for CPU-only sinks and older hubs.
     void offer_gpu_frames();
+    // CPU targets use the existing shared frame slots, independently of GPU
+    // import support. Only a sink owning writable storage offers this API.
+    void offer_cpu_frames();
+    void end_frame() { sink_.end_frame(); }
 
     // The host table the core is given. Stable for the session's lifetime.
     const rcore_host_api* host_api() const { return &host_; }
+    void set_video_requested(bool requested) { video_requested_ = requested; }
     void set_presentation_size(std::uint32_t width, std::uint32_t height) {
         presentation_width_ = width && height ? width : 0;
         presentation_height_ = width && height ? height : 0;
@@ -151,6 +162,9 @@ private:
     static void h_log(void*, std::uint32_t, const char*);
     static void h_report(void*, const rcore_event*);
     static void h_video(void*, const rcore_frame*);
+    static std::uint32_t h_video_requested(void*, std::uint64_t, std::uint64_t);
+    static std::uint32_t h_video_acquire_cpu(void*, std::uint32_t, std::uint32_t,
+                                              std::uint32_t, rcore_cpu_video_target*);
     static void h_audio(void*, const std::int16_t*, std::uint32_t);
     static void h_rate(void*, std::uint32_t);
     static void h_input(void*, std::uint32_t, rcore_pad*);
@@ -177,6 +191,7 @@ private:
     Route* route_ = nullptr;
     Sink& sink_;
     rcore_host_api host_{};
+    bool video_requested_ = true;
     std::uint32_t presentation_width_ = 0, presentation_height_ = 0;
     std::map<std::string, std::optional<std::string>> options_;
     std::vector<SaveRegion> regions_;

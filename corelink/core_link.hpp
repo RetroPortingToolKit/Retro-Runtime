@@ -33,6 +33,8 @@ struct LaunchSpec {
     fs::path session_dir;  // runner.log, core.log, events.tsv, the core's cache
     bool gl = true;
     bool strict = false;
+    // Actual frontend can reconstruct exact horizontal pairs before filtering.
+    bool cpu_pixel_pairs = false;
     rcore_gpu_capabilities gpu_capabilities{}; // actual local import support, sampled once
     std::map<std::string, std::string> options;
     std::optional<fs::path> load_state;
@@ -160,6 +162,9 @@ public:
     // Available physical pixels before letterboxing; zeros when unknown.
     bool grant(const rcore_pad pads[RCORE_MAX_SEATS], std::uint32_t width = 0,
                std::uint32_t height = 0);
+    // Presentation-only permission; old runners/cores may still send video.
+    bool grant(const rcore_pad pads[RCORE_MAX_SEATS], std::uint32_t width,
+               std::uint32_t height, bool video_requested);
     std::uint64_t frames_granted() const { return granted_; }
     std::uint64_t frames_done() const { return done_; }
     const FrameStats& frame_stats() const { return stats_; }

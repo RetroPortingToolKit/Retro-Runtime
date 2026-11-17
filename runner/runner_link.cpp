@@ -98,14 +98,17 @@ void copy_str(char* dst, std::size_t cap, const char* src) {
 // dir (everything) and to the hub (what it shows); input from the grant.
 class LinkSink final : public Sink {
 public:
-    LinkSink(Channel& sock, SharedHeader* shm, const fs::path& out)
-        : sock_(sock), shm_(shm), log_(out / "core.log"), events_(out / "events.tsv") {
+    LinkSink(Channel& sock, SharedHeader* shm, const fs::path& out, bool unpaced)
+        : sock_(sock), shm_(shm), unpaced_(unpaced), log_(out / "core.log"), events_(out / "events.tsv") {
         base_ = reinterpret_cast<std::uint8_t*>(shm);
     }
     ~LinkSink() override {
         for (auto& item : gpu_rings_) close_gpu_handles(item.second);
     }
     void set_gpu_capabilities(const rcore_gpu_capabilities& caps) { gpu_caps_ = caps; }
+    void video_progress(std::uint64_t, std::uint64_t game_frame) override {
+        last_game_frame = game_frame;
+    }
     bool gpu_capabilities(rcore_gpu_capabilities& out) override {
         out = gpu_caps_;
         return out.handle_types && out.sync_types;
@@ -165,6 +168,8 @@ public:
         ring.in_flight[f.image_index] = frame_number;
         last_game_frame = f.game_frame;
         last_gpu_ = true;
+        cpu_loan_ = false;
+        cpu_repeat_ = false;
         return true;
     }
     void gpu_unregister(std::uint64_t generation) override {
@@ -241,20 +246,77 @@ public:
         if (e.kind == RCORE_EVENT_FAULT) ++faults;
     }
 
+    bool acquire_cpu(std::uint32_t width, std::uint32_t height, std::uint32_t format,
+                     rcore_cpu_video_target& out) override {
+        if (cpu_loan_ || !width || !height ||
+            (format != RCORE_PIXEL_RGBA8 && format != RCORE_PIXEL_RGBA8_X2) ||
+            (format == RCORE_PIXEL_RGBA8_X2 && (!cpu_pixel_pairs || width > kMaxFrameWidth / 2)) ||
+            width > kMaxFrameWidth || height > kMaxFrameHeight) return false;
+        out.width = width; out.height = height; out.stride = width * 4;
+        out.pixel_format = format;
+        out.pixels = base_ + shm_->frames_offset + std::size_t(back_) * kFrameSlotBytes;
+        if (published_ >= 0 && !last_gpu_) {
+            const FrameInfo& previous = shm_->slot[published_];
+            out.previous_pixels = base_ + shm_->frames_offset +
+                                  std::size_t(published_) * kFrameSlotBytes;
+            out.previous_width = previous.width; out.previous_height = previous.height;
+            out.previous_stride = previous.stride; out.previous_pixel_format = previous.pixel_format;
+            if (unpaced_ && out.struct_size >= offsetof(rcore_cpu_video_target, flags) + sizeof out.flags)
+                out.flags = RCORE_CPU_VIDEO_REPEAT_PREVIOUS;
+        }
+        cpu_loan_width_ = width; cpu_loan_height_ = height; cpu_loan_format_ = format;
+        cpu_loan_ = true;
+        cpu_repeat_ = (out.flags & RCORE_CPU_VIDEO_REPEAT_PREVIOUS) != 0;
+        return true;
+    }
+    void end_frame() override { cpu_loan_ = cpu_repeat_ = false; }
+
     void frame(const rcore_frame& f) override {
-        last_gpu_ = false;
-        if (f.pixel_format != RCORE_PIXEL_RGBA8 || f.width > kMaxFrameWidth ||
-            f.height > kMaxFrameHeight) {
+        const bool loan = cpu_loan_;
+        const bool repeat = cpu_repeat_;
+        cpu_loan_ = false; // any submission ends writable access
+        cpu_repeat_ = false;
+        if (!f.pixels || !f.width || !f.height ||
+            (f.pixel_format != RCORE_PIXEL_RGBA8 && f.pixel_format != RCORE_PIXEL_RGBA8_X2) ||
+            (f.pixel_format == RCORE_PIXEL_RGBA8_X2 && (!cpu_pixel_pairs || !loan ||
+                cpu_loan_format_ != f.pixel_format || f.width > kMaxFrameWidth / 2)) ||
+            f.width > kMaxFrameWidth || f.height > kMaxFrameHeight || f.stride < f.width * 4) {
             ++bad_frames; // reported at the end of the frame, not mid-core
             return;
+        }
+        if (loan && repeat && f.pixel_format == cpu_loan_format_ && !last_gpu_ && published_ >= 0) {
+            const FrameInfo& previous = shm_->slot[published_];
+            const auto* pixels = base_ + shm_->frames_offset + std::size_t(published_) * kFrameSlotBytes;
+            if (f.pixels == pixels && f.width == previous.width && f.height == previous.height &&
+                f.stride == previous.stride && f.pixel_format == previous.pixel_format &&
+                f.aspect_num == previous.aspect_num && f.aspect_den == previous.aspect_den) {
+                // HostSession observed this field before commit. Keep both
+                // pixels and metadata untouched: this slot may be hub-owned.
+                last_game_frame = f.struct_size >= offsetof(rcore_frame, game_frame) + sizeof f.game_frame
+                                      ? f.game_frame : 0;
+                return;
+            }
         }
         std::uint8_t* dst = base_ + shm_->frames_offset + std::size_t(back_) * kFrameSlotBytes;
         const auto* src = static_cast<const std::uint8_t*>(f.pixels);
         const std::size_t row = std::size_t(f.width) * 4;
-        for (std::uint32_t y = 0; y < f.height; ++y) {
-            std::memcpy(dst + y * row, src + std::size_t(y) * f.stride, row);
+        if (src == dst && loan && f.width == cpu_loan_width_ && f.height == cpu_loan_height_ &&
+            f.stride == row && f.pixel_format == cpu_loan_format_) {
+            // The core filled our exclusively owned back slot. The metadata
+            // and atomic ownership exchange below are the publication.
+        } else {
+            const auto address = reinterpret_cast<std::uintptr_t>(src);
+            const auto back_address = reinterpret_cast<std::uintptr_t>(dst);
+            if (address >= back_address && address < back_address + kFrameSlotBytes) {
+                ++bad_frames; // stale/mismatched loan must not self-copy
+                return;
+            }
+            for (std::uint32_t y = 0; y < f.height; ++y) {
+                std::memcpy(dst + y * row, src + std::size_t(y) * f.stride, row);
+            }
         }
         FrameInfo& info = shm_->slot[back_];
+        last_gpu_ = false;
         info.width = f.width;
         info.height = f.height;
         info.stride = static_cast<std::uint32_t>(row);
@@ -279,9 +341,17 @@ public:
         if (last_gpu_) return {}; // a CPU slot from an earlier field is stale
         if (published_ < 0) return {};
         const FrameInfo& info = shm_->slot[published_];
-        return state::make_thumbnail(base_ + shm_->frames_offset +
-                                         std::size_t(published_) * kFrameSlotBytes,
-                                     info.width, info.height, info.stride);
+        const auto* pixels = base_ + shm_->frames_offset + std::size_t(published_) * kFrameSlotBytes;
+        if (info.pixel_format == RCORE_PIXEL_RGBA8_X2) {
+            const auto width = info.width * 2;
+            std::vector<std::uint8_t> expanded(std::size_t(width) * info.height * 4);
+            for (std::uint32_t y = 0; y < info.height; ++y)
+                for (std::uint32_t x = 0; x < width; ++x)
+                    std::memcpy(expanded.data() + (std::size_t(y) * width + x) * 4,
+                                pixels + std::size_t(y) * info.stride + (x / 2) * 4, 4);
+            return state::make_thumbnail(expanded.data(), width, info.height, width * 4);
+        }
+        return state::make_thumbnail(pixels, info.width, info.height, info.stride);
     }
 
     void take_thumbnail(const std::vector<unsigned char>& packet) {
@@ -339,6 +409,7 @@ public:
     std::uint64_t last_game_frame = 0;
     std::uint32_t faults = 0;
     std::uint32_t bad_frames = 0;
+    bool cpu_pixel_pairs = false;
     // The core's stated frame rate (set_frame_rate), 0/0 until it states one.
     std::uint32_t rate_num = 0, rate_den = 0;
 
@@ -364,6 +435,10 @@ private:
     SharedHeader* shm_;
     std::uint8_t* base_;
     std::uint32_t back_ = 2; // the triple buffer's initial back slot
+    bool cpu_loan_ = false;
+    bool cpu_repeat_ = false;
+    std::uint32_t cpu_loan_width_ = 0, cpu_loan_height_ = 0, cpu_loan_format_ = 0;
+    const bool unpaced_;
     int published_ = -1;     // the slot last swapped into middle
     std::ofstream log_, events_;
 };
@@ -427,7 +502,7 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
     const std::size_t frame_done_size =
         link_has_frame_stats(session_minor) ? sizeof(FrameDoneMsg) : kFrameDoneSize21;
 
-    LinkSink sink(sock, shm, a.out);
+    LinkSink sink(sock, shm, a.out, a.unpaced);
     HostSession session(core, sink);
     if (link_has_gpu_frames(session_minor)) {
         std::vector<unsigned char> packet;
@@ -439,6 +514,7 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         sink.set_gpu_capabilities(offered.caps);
         session.offer_gpu_frames();
     }
+    session.offer_cpu_frames();
     for (const DataAccessory& d : a.data_accessories) session.bind_data_accessory(d.seat, d.slot);
     // 2.1: a hub's AccessoryData, queued for the next granted frame. One
     // arriving for a (seat, slot) nothing is plugged into is dropped and said
@@ -745,6 +821,10 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
             }
         }
         sink.frame_number = g.frame_number;
+        session.set_video_requested(!link_has_video_demand(session_minor) || buf.size() < sizeof g
+                                    || !(g.flags & kGrantSkipVideo));
+        sink.cpu_pixel_pairs = link_has_cpu_pixel_pairs(session_minor) && buf.size() >= sizeof g
+                                && (g.flags & kGrantCpuPixelPairs);
         session.set_presentation_size(g.presentation_width, g.presentation_height);
         // Everything that arrived before this grant is the frame's accessory
         // sequence; a message that arrives while the frame runs waits for the
@@ -760,6 +840,7 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         auto timed = [&](rcore_result (*fn)()) {
             const Clock::time_point t0 = Clock::now();
             const rcore_result rc = fn();
+            session.end_frame();
             done.work_ns += static_cast<std::uint64_t>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - t0).count());
             return rc;
@@ -823,7 +904,7 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         }
         if (sink.bad_frames) {
             code = exiting(sock, 1, "the core submitted a frame this link cannot carry "
-                                    "(format, or larger than 1024x1024)");
+                                    "(invalid format, geometry, or CPU target)");
             break;
         }
         if (done.result != RCORE_OK) {

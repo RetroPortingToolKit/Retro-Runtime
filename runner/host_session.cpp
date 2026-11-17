@@ -1,6 +1,7 @@
 #include "host_session.hpp"
 #include "route.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -17,6 +18,7 @@ HostSession::HostSession(const LoadedCore& core, Sink& sink) : core_(core), sink
     host_.log = h_log;
     host_.report = h_report;
     host_.video_submit = h_video;
+    host_.video_requested = h_video_requested;
     host_.audio_push = h_audio;
     host_.set_audio_rate = h_rate;
     host_.input_get = h_input;
@@ -48,6 +50,33 @@ void HostSession::offer_gpu_frames() {
     host_.gpu_frames_released = h_gpu_released;
     host_.video_submit_gpu = h_gpu_frame;
     host_.gpu_frames_unregister = h_gpu_unregister;
+}
+
+void HostSession::offer_cpu_frames() {
+    host_.video_acquire_cpu = h_video_acquire_cpu;
+}
+
+std::uint32_t HostSession::h_video_acquire_cpu(void* ctx, std::uint32_t width,
+                                             std::uint32_t height, std::uint32_t format,
+                                             rcore_cpu_video_target* out) {
+    if (!out || out->struct_size < offsetof(rcore_cpu_video_target, flags) || !width || !height ||
+        (format != RCORE_PIXEL_RGBA8 && format != RCORE_PIXEL_RGBA8_X2) ||
+        (format == RCORE_PIXEL_RGBA8_X2 && width > UINT32_MAX / 2) || width > UINT32_MAX / 4 ||
+        std::size_t(height) > SIZE_MAX / (std::size_t(width) * 4)) return 0;
+    auto* s = self(ctx);
+    // Replay observers retain the canonical full-width byte oracle.
+    if (format == RCORE_PIXEL_RGBA8_X2 && s->route_) return 0;
+    // Route observers request pictures even when the host does not display.
+    if (!s->video_requested_ && !s->route_) return 0;
+    // The producer always gets our full local object; an older core lends
+    // only the rev13 prefix. Never write our appended flags into its stack.
+    const auto supplied = std::min<std::size_t>(out->struct_size, sizeof *out);
+    rcore_cpu_video_target target{};
+    target.struct_size = static_cast<std::uint32_t>(supplied);
+    if (!s->sink_.acquire_cpu(width, height, format, target)) return 0;
+    target.struct_size = static_cast<std::uint32_t>(supplied);
+    std::memcpy(out, &target, supplied);
+    return 1;
 }
 
 std::uint32_t HostSession::h_gpu_caps(void* ctx, rcore_gpu_capabilities* out) {
@@ -102,6 +131,10 @@ std::uint32_t HostSession::h_gpu_released(void* ctx, std::uint64_t generation,
 std::uint32_t HostSession::h_gpu_frame(void* ctx, const rcore_gpu_frame* frame) {
     if (!frame || frame->struct_size < sizeof *frame || !frame->generation ||
         frame->image_index >= RCORE_GPU_MAX_IMAGES) return 0;
+    self(ctx)->sink_.video_progress(frame->frame_number, frame->game_frame);
+    // Legacy cores may ignore demand. Complete the existing GPU ownership
+    // protocol if they publish: a ready binary semaphore cannot be discarded
+    // and reused as though a consumer had waited for it.
     if (self(ctx)->route_) self(ctx)->route_->gpu_video();
     return self(ctx)->sink_.gpu_frame(*frame) ? 1u : 0u;
 }
@@ -243,7 +276,19 @@ void HostSession::h_report(void* ctx, const rcore_event* e) {
 
 void HostSession::h_video(void* ctx, const rcore_frame* f) {
     if (f && self(ctx)->route_) self(ctx)->route_->video(*f);
-    if (f) self(ctx)->sink_.frame(*f);
+    if (f) {
+        auto* s = self(ctx);
+        s->sink_.video_progress(f->frame_number,
+            f->struct_size >= offsetof(rcore_frame, game_frame) + sizeof f->game_frame ? f->game_frame : 0);
+        if (s->video_requested_ || s->route_) s->sink_.frame(*f);
+    }
+}
+
+std::uint32_t HostSession::h_video_requested(void* ctx, std::uint64_t frame, std::uint64_t picture) {
+    auto* s = self(ctx);
+    s->sink_.video_progress(frame, picture);
+    // Routes/recordings observe per-field pictures; never suppress those.
+    return s->video_requested_ || s->route_ != nullptr;
 }
 
 void HostSession::h_audio(void* ctx, const std::int16_t* s, std::uint32_t n) {
