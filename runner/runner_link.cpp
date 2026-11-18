@@ -910,6 +910,13 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
             else { code = exiting(sock,route->exit_code(),route->error()); break; }
         }
         mirror_saves();
+        // An invalid picture ends the session. A successful acknowledgement
+        // here would allow another grant while the runner is closing.
+        if (sink.bad_frames) {
+            code = exiting(sock, 1, "the core submitted a frame this link cannot carry "
+                                    "(invalid format, geometry, or CPU target)");
+            break;
+        }
         send_msg_sized(sock, done, frame_done_size);
         const std::uint64_t period_ns =
             sink.rate_num && sink.rate_den
@@ -919,11 +926,6 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         if (!hint.status().empty() && !hint_said) {
             std::fprintf(stderr, "%s\n", hint.status().c_str());
             hint_said = true;
-        }
-        if (sink.bad_frames) {
-            code = exiting(sock, 1, "the core submitted a frame this link cannot carry "
-                                    "(invalid format, geometry, or CPU target)");
-            break;
         }
         if (done.result != RCORE_OK) {
             code = exiting(sock, 1, "run_frame " + std::to_string(g.frame_number) + " -> " +
