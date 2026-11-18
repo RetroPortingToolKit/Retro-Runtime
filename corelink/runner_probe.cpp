@@ -64,6 +64,7 @@ bool probe_runner(const fs::path& runner, RunnerVersion& out, std::string* error
     v.version = fields["version"];
     v.commit = fields["commit"];
     v.gl = fields["gl"] == "1";
+    v.safe_interactive_recording = fields["safe_interactive_recording"] == "1";
     if (fields.count("game_package") && !num("game_package", v.game_package)) {
         return fail("--version printed an unreadable game_package line");
     }

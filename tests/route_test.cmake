@@ -63,4 +63,31 @@ execute_process(COMMAND "${RUNNER}" ${base} --play-route "${OUT}/link.route"
 if(NOT rc EQUAL 0)
     message(FATAL_ERROR "link to headless replay: ${rc} ${err}")
 endif()
+set(segment "${OUT}/interactive-state.route")
+set(state "${OUT}/interactive-state.rstate")
+file(REMOVE "${segment}" "${segment}.partial" "${state}")
+execute_process(COMMAND "${LINK}" --runner "${RUNNER}" ${base} --frames 12
+    --diagnostic-record-start-at "1:${segment}" --state-save-at "5:${state}" --state-load-at "9:${state}"
+    --out "${OUT}/interactive-state" RESULT_VARIABLE rc OUTPUT_VARIABLE trace ERROR_VARIABLE err)
+if(NOT rc EQUAL 0 OR NOT EXISTS "${segment}" OR NOT EXISTS "${state}"
+   OR NOT trace MATCHES "state: load at frame 9 ok")
+    message(FATAL_ERROR "interactive recording blocked a player state operation: ${rc} ${err}")
+endif()
+execute_process(COMMAND "${RUNNER}" ${base} --play-route "${segment}"
+    --out "${OUT}/interactive-state-replay" RESULT_VARIABLE rc OUTPUT_QUIET ERROR_VARIABLE err)
+if(NOT rc EQUAL 0)
+    message(FATAL_ERROR "interactive segment before state save did not replay: ${rc} ${err}")
+endif()
+# An unavailable recording destination must leave the same game session alive.
+set(blocked "${OUT}/recording-parent-is-a-file")
+file(WRITE "${blocked}" "keep")
+execute_process(COMMAND "${LINK}" --runner "${RUNNER}" ${base} --frames 8
+    --diagnostic-record-start-at "1:${blocked}/fail.route"
+    --out "${OUT}/interactive-failed-destination"
+    RESULT_VARIABLE rc OUTPUT_VARIABLE trace ERROR_VARIABLE err)
+file(READ "${blocked}" contents)
+if(NOT rc EQUAL 0 OR NOT trace MATCHES "replay: start at 1 state 5"
+   OR NOT trace MATCHES "8 frame\\(s\\) granted and done" OR NOT contents STREQUAL "keep")
+    message(FATAL_ERROR "failed recording destination interrupted play: ${rc} ${trace} ${err}")
+endif()
 message(STATUS "routes: fresh process, link recording, identity/truncation/grammar refusals and first divergence pass")

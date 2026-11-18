@@ -20,6 +20,9 @@ def recover(source: Path, destination: Path) -> int:
         row = lines[index].split()
         if not row or not lines[index].endswith(b'\n'):
             break
+        if index == 1 and row == [b'D', b'1']:
+            index += 1
+            continue
         if row[0] in (b'I', b'A', b'S') and not boot:
             index += 1
             continue

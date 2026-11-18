@@ -64,10 +64,11 @@ std::uint32_t HostSession::h_video_acquire_cpu(void* ctx, std::uint32_t width,
         (format == RCORE_PIXEL_RGBA8_X2 && width > UINT32_MAX / 2) || width > UINT32_MAX / 4 ||
         std::size_t(height) > SIZE_MAX / (std::size_t(width) * 4)) return 0;
     auto* s = self(ctx);
+    const bool observes_av = s->route_ && s->route_->observes_av();
     // Replay observers retain the canonical full-width byte oracle.
-    if (format == RCORE_PIXEL_RGBA8_X2 && s->route_) return 0;
+    if (format == RCORE_PIXEL_RGBA8_X2 && observes_av) return 0;
     // Route observers request pictures even when the host does not display.
-    if (!s->video_requested_ && !s->route_) return 0;
+    if (!s->video_requested_ && !observes_av) return 0;
     // The producer always gets our full local object; an older core lends
     // only the rev13 prefix. Never write our appended flags into its stack.
     const auto supplied = std::min<std::size_t>(out->struct_size, sizeof *out);
@@ -275,12 +276,13 @@ void HostSession::h_report(void* ctx, const rcore_event* e) {
 }
 
 void HostSession::h_video(void* ctx, const rcore_frame* f) {
-    if (f && self(ctx)->route_) self(ctx)->route_->video(*f);
+    auto* s = self(ctx);
+    const bool observes_av = s->route_ && s->route_->observes_av();
+    if (f && observes_av) s->route_->video(*f);
     if (f) {
-        auto* s = self(ctx);
         s->sink_.video_progress(f->frame_number,
             f->struct_size >= offsetof(rcore_frame, game_frame) + sizeof f->game_frame ? f->game_frame : 0);
-        if (s->video_requested_ || s->route_) s->sink_.frame(*f);
+        if (s->video_requested_ || observes_av) s->sink_.frame(*f);
     }
 }
 
@@ -288,12 +290,13 @@ std::uint32_t HostSession::h_video_requested(void* ctx, std::uint64_t frame, std
     auto* s = self(ctx);
     s->sink_.video_progress(frame, picture);
     // Routes/recordings observe per-field pictures; never suppress those.
-    return s->video_requested_ || s->route_ != nullptr;
+    return s->video_requested_ || (s->route_ && s->route_->observes_av());
 }
 
 void HostSession::h_audio(void* ctx, const std::int16_t* s, std::uint32_t n) {
-    if (self(ctx)->route_) self(ctx)->route_->audio(s, n);
-    self(ctx)->sink_.audio(s, n);
+    auto* host = self(ctx);
+    if (host->route_ && host->route_->observes_av()) host->route_->audio(s, n);
+    host->sink_.audio(s, n);
 }
 
 void HostSession::h_rate(void* ctx, std::uint32_t hz) { self(ctx)->sink_.audio_rate(hz); }

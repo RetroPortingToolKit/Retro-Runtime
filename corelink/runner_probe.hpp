@@ -11,6 +11,8 @@
 #include <filesystem>
 #include <string>
 
+#define RETRO_CORELINK_HAS_SAFE_INTERACTIVE_RECORDING 1
+
 namespace retro::corelink {
 
 struct RunnerVersion {
@@ -19,6 +21,9 @@ struct RunnerVersion {
     std::uint32_t link_major = 0, link_minor = 0;
     std::uint32_t abi_major = 0, draft_revision = 0;
     bool gl = false;
+    // Interactive replays cannot interrupt play on a write failure and seal
+    // before a player state operation. Old runners omit this capability.
+    bool safe_interactive_recording = false;
     // 1 when the runner takes --package (GAME_PACKAGE cores); 0 for a runner
     // from before it did, which prints no game_package line.
     std::uint32_t game_package = 0;

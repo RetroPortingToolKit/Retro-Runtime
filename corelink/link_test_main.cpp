@@ -105,6 +105,7 @@ int main(int argc, char** argv) {
         std::uint64_t at;
         bool save;
         std::string path;
+        bool diagnostics = false;
     };
     std::vector<StateOp> state_ops;
     std::vector<StateOp> record_ops;
@@ -203,10 +204,11 @@ int main(int argc, char** argv) {
                 if (comma == std::string::npos) break;
                 start = comma + 1;
             }
-        } else if (a == "--record-start-at") {
+        } else if (a == "--record-start-at" || a == "--diagnostic-record-start-at") {
             const auto v=val(); const auto colon=v.find(':');
             if (colon==std::string::npos) die("--record-start-at K:PATH");
-            record_ops.push_back({std::strtoull(v.substr(0,colon).c_str(),nullptr,10),true,v.substr(colon+1)});
+            record_ops.push_back({std::strtoull(v.substr(0,colon).c_str(),nullptr,10),true,
+                                  v.substr(colon+1),a=="--diagnostic-record-start-at"});
         } else if (a == "--record-stop-at") {
             record_ops.push_back({std::strtoull(val().c_str(),nullptr,10),false,{}});
         } else if (a == "--state-save-at") {
@@ -340,7 +342,8 @@ int main(int argc, char** argv) {
         if (clean_route_end) break;
         for (const StateOp& op : record_ops) {
             if (op.at!=k || !ok) continue;
-            if (!link.request_recording(op.save,utf8_path(op.path))) die("replay request refused");
+            if (!link.request_recording(op.save,utf8_path(op.path),op.diagnostics))
+                die("replay request refused");
             while (link.replay_pending() && link.state()==LinkState::Ready) link.pump(100);
             const auto& status=link.replay_status();
             std::printf("replay: %s at %llu state %u fields %llu %s\n",op.save ? "start" : "stop",

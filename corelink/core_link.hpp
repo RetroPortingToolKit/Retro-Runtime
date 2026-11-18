@@ -182,7 +182,7 @@ public:
     // answers with a failure naming that.
     std::optional<StateResult> take_state_result();
     bool replays_supported() const;
-    bool request_recording(bool record, const fs::path& path = {});
+    bool request_recording(bool record, const fs::path& path = {}, bool diagnostics = false);
     bool replay_pending() const { return replay_pending_; }
     const ReplayStatusMsg& replay_status() const { return replay_status_; }
 

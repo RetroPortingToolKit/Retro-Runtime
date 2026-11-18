@@ -182,7 +182,9 @@ struct MsgHeader {
 enum class ReplayState : std::uint32_t { Idle, Recording, Saved, Playing, TakenOver, Failed, Complete, Stopped };
 struct ReplayControlMsg {
     MsgHeader h;
-    std::uint32_t record; // 1: start at a restored anchor, 0: stop recording
+    // 0: stop, 1: start full recording, 2: start a diagnostics recording.
+    // Use 2 only when the runner advertises safe_interactive_recording.
+    std::uint32_t record;
     char path[4096]; // exclusive destination, never overwrite
 };
 struct ReplayStatusMsg {
