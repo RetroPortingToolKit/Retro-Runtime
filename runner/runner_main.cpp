@@ -317,6 +317,7 @@ void print_version() {
                 "netplay %d\n"
                 "netplay_module_abi %u\n"
                 "accessory_data 1\n"
+                "safe_interactive_recording 1\n"
                 "boot_routes 1\n",
                 RETRO_RUNTIME_VERSION, RETRO_RUNTIME_VERSION, RETRO_RUNTIME_COMMIT,
                 retro::corelink::kProtocolMajor, retro::corelink::kProtocolMinor,

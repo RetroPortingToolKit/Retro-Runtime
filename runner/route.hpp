@@ -13,6 +13,7 @@ struct RouteArgs {
     fs::path record, play, verdict, runner, runner_reference;
     bool allow_core_change = false;
     bool takeover = false;
+    bool diagnostics = false;
     std::map<std::uint64_t, std::string> marks;
     bool active() const { return !record.empty() || !play.empty(); }
 };
@@ -30,6 +31,7 @@ public:
     bool finish(bool success, bool stopped = false, bool taken_over = false);
     static bool live_input(const rcore_pad pads[RCORE_MAX_SEATS]);
     bool playback() const { return !args_.play.empty(); }
+    bool observes_av() const { return !args_.diagnostics; }
     bool done() const { return playback() && next_ >= frames_.size(); }
     std::uint64_t length() const { return frames_.size(); }
     std::uint64_t field() const { return next_; }

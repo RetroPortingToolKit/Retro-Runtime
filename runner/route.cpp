@@ -14,6 +14,7 @@ extern char** environ;
 
 namespace retro::runner {
 namespace {
+constexpr std::uint64_t kDiagnosticCheckpointFields = 120;
 constexpr std::size_t limit = 256 * 1024 * 1024;
 std::string hex(const void* data, std::size_t n) {
     if (!n) return "-";
@@ -132,11 +133,18 @@ bool Route::open(const std::string& rom, const std::string& package_sha,
         session_.set_presentation_size(boot_.width,boot_.height);
     } else {
         partial_ = args_.record; partial_ += ".partial";
-        if (fs::exists(args_.record) || fs::exists(partial_)) return fail("route or partial file already exists");
-        if (!args_.record.parent_path().empty()) fs::create_directories(args_.record.parent_path());
+        std::error_code ec;
+        const bool target_exists = fs::exists(args_.record, ec);
+        if (ec) return fail("cannot inspect route destination: " + ec.message());
+        const bool partial_exists = fs::exists(partial_, ec);
+        if (ec) return fail("cannot inspect partial route: " + ec.message());
+        if (target_exists || partial_exists) return fail("route or partial file already exists");
+        if (!args_.record.parent_path().empty()) fs::create_directories(args_.record.parent_path(), ec);
+        if (ec) return fail("cannot create route directory: " + ec.message());
         file_.open(partial_, std::ios::binary | std::ios::out);
         if (!file_) return fail("cannot create route partial file");
         file_ << "RCORE_ROUTE 1\n";
+        if (args_.diagnostics) file_ << "D 1\n";
         for (const auto& [k,v] : identity_) file_ << "I " << hex(k) << ' ' << hex(v) << '\n';
     }
     return true;
@@ -155,13 +163,17 @@ bool Route::capture_anchor() {
     if (api.serialize(anchor_.data(),size) != RCORE_OK)
         return fail("the core refused to save the replay anchor");
     const auto before=state_digest();
-    // Record and playback both follow the core's restore path.
-    if (api.unserialize(anchor_.data(),size) != RCORE_OK)
-        return fail("the core refused to restore the replay anchor");
-    anchor_state_=state_digest();
-    if (before!=anchor_state_) {
-        expected_state_=before; actual_state_=anchor_state_;
-        return fail("the core changed state while restoring the replay anchor",true);
+    anchor_state_ = before;
+    // A developer recording checks the restore path immediately. Automatic
+    // diagnostics must leave the live game alone and verify on playback.
+    if (!args_.diagnostics) {
+        if (api.unserialize(anchor_.data(),size) != RCORE_OK)
+            return fail("the core refused to restore the replay anchor");
+        anchor_state_ = state_digest();
+        if (before != anchor_state_) {
+            expected_state_ = before; actual_state_ = anchor_state_;
+            return fail("the core changed state while restoring the replay anchor",true);
+        }
     }
     file_ << "A " << hex(anchor_state_) << ' ' << hex(anchor_.data(),anchor_.size()) << '\n';
     return bool(file_);
@@ -267,9 +279,18 @@ std::string Route::state_digest() const {
 }
 bool Route::end() {
     if (!calls_complete()) return false;
-    current_.state=state_digest();
-    current_.image = picture_.empty() ? "-" : std::to_string(picture_width_) + ":" + std::to_string(picture_height_) + ":" + sha256_hex(picture_.data(),picture_.size());
-    current_.audio = sha256_hex(pcm_.data(),pcm_.size());
+    const bool checkpoint = !args_.diagnostics || next_ == 0 ||
+                            (next_ + 1) % kDiagnosticCheckpointFields == 0;
+    current_.state = checkpoint ? state_digest() : "*";
+    if (observes_av()) {
+        current_.image = picture_.empty() ? "-" :
+            std::to_string(picture_width_) + ":" + std::to_string(picture_height_) + ":" +
+            sha256_hex(picture_.data(), picture_.size());
+        current_.audio = sha256_hex(pcm_.data(), pcm_.size());
+    } else {
+        current_.image = "*";
+        current_.audio = "*";
+    }
     const auto mark = args_.marks.find(next_+1);
     current_.mark = playback() ? frames_[next_].mark : mark == args_.marks.end() ? "" : mark->second;
     if (playback()) {
@@ -300,7 +321,9 @@ bool Route::write_field(const Field& f, bool boot) {
         file_ << '\n';
     }
     for (auto t : f.clocks) file_ << "T " << t << '\n';
-    file_.flush();
+    // Strict routes retain every field on disk. Background recording batches
+    // unobserved fields with the adjacent checkpoint instead of flushing each.
+    if (!args_.diagnostics || boot || f.state != "*") file_.flush();
     if(file_.tellp()>std::streamoff(limit-1024))return fail("route exceeds 256 MiB limit");
     return file_ ? true : fail("cannot write route");
 }
@@ -324,7 +347,10 @@ bool Route::read() {
         bool boot_seen = false;
         while (std::getline(lines,line)) {
             std::istringstream row(line); const auto type = word(row);
-            if (type == "I" && !boot_seen && saves_.empty()) {
+            if (type == "D" && !args_.diagnostics && !boot_seen && recorded_identity_.empty()) {
+                if (word(row) != "1") throw std::runtime_error("unsupported diagnostics recording");
+                args_.diagnostics = true;
+            } else if (type == "I" && !boot_seen && saves_.empty()) {
                 const auto key=unhex(word(row)), value=unhex(word(row));
                 if (!recorded_identity_.emplace(key,value).second) throw std::runtime_error("duplicate identity");
             } else if (type == "A" && !boot_seen && saves_.empty() && anchor_.empty()) {

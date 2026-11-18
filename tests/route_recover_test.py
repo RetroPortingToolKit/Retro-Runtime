@@ -27,7 +27,7 @@ class RecoveryTest(unittest.TestCase):
     def test_anchor_prefix_is_preserved(self):
         with tempfile.TemporaryDirectory() as folder:
             source, output = Path(folder) / 'movie.partial', Path(folder) / 'recovered.route'
-            prefix = (b'RCORE_ROUTE 1\nA 2d 46414b45\nB 0 0 0 0 0 - - - -\n'
+            prefix = (b'RCORE_ROUTE 1\nD 1\nA 2d 46414b45\nB 0 0 0 0 0 - - - -\n'
                       b'F 1 0 0 0 0 2d 2d 2d -\n')
             source.write_bytes(prefix)
             self.assertEqual(module.recover(source, output), 1)

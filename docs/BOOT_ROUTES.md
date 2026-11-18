@@ -59,6 +59,14 @@ reports divergence instead of weakening checkpoints. Anchors are limited to
 must wait for the response before granting another frame and display recording
 status only after confirmation. Controls are unavailable with older peers,
 netplay, accessories, or an active playback. Existing-file destinations refuse.
+
+A runner advertising `safe_interactive_recording 1` also accepts automatic
+gameplay diagnostics. These recordings keep every input and clock callback
+with a checkpoint at the first field and every 120 fields. They carry a
+`D 1` marker and omit picture and audio digests so capture works alongside
+normal presentation. Saving or loading a state seals the active interactive
+recording first. Capture failures are reported to the launcher and play
+continues.
 The frontend can list sealed `.route` files and start playback in a fresh runner
 using `RETRO_PLAY_ROUTE`. `RETRO_ROUTE_VERDICT` selects the result path.
 The hub supplies presentation and pacing. Normal completion ends the runner;
@@ -96,7 +104,8 @@ configuration, not every game or future core version.
 
 ## Interrupted recording
 
-The active file is `<route>.partial`. The writer flushes each complete field.
+The active file is `<route>.partial`. Full recordings flush each complete
+field. Automatic diagnostics flush at checkpoints.
 A normal link Quit or headless Ctrl+C seals completed fields in the requested
 route file. A fault leaves the partial file. An unsealed partial file refuses
 normal playback.

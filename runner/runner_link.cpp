@@ -706,6 +706,7 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
     int code = 0;
     bool user_quit = false;
     bool taken_over = false, takeover_armed = false;
+    bool interactive_recording = false;
     std::string recording_path = a.route.record.string();
     auto replay_status = [&](ReplayState state, const std::string& detail = {}) {
         if (!link_has_replays(session_minor)) return;
@@ -716,6 +717,13 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         send_msg(sock,msg);
     };
     if (route) replay_status(route->playback() ? ReplayState::Playing : ReplayState::Recording);
+    auto end_interactive_recording = [&](bool seal) {
+        session.set_route(nullptr);
+        const bool saved = route->finish(seal) && seal;
+        replay_status(saved ? ReplayState::Saved : ReplayState::Failed, route->error());
+        route.reset();
+        interactive_recording = false;
+    };
     for (;;) {
         const RecvResult rr = recv_packet(sock, buf, nullptr, -1);
         if (rr != RecvResult::Packet) { user_quit = true; break; }
@@ -733,7 +741,7 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         }
         if (t == Msg::ReplayControl && link_has_replays(session_minor)) {
             ReplayControlMsg request{};
-            if (!as_msg(buf,request) || request.record>1) {
+            if (!as_msg(buf,request) || request.record>2) {
                 replay_status(ReplayState::Failed,"malformed replay request"); continue;
             }
             request.path[sizeof request.path-1]=0;
@@ -746,6 +754,7 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
                 }
                 route.reset();
                 RouteArgs args=a.route; args.play.clear(); args.record=utf8_path(request.path);
+                args.diagnostics = request.record == 2;
                 args.verdict=args.record; args.verdict += ".verdict.json";
                 if (args.record.empty()) { replay_status(ReplayState::Failed,"a replay destination is required"); continue; }
                 route.emplace(core,session,args,a.out); recording_path=request.path;
@@ -755,7 +764,10 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
                     replay_status(ReplayState::Failed,why); route.reset(); continue;
                 }
                 taken_over=false; takeover_armed=false; session.set_route(&*route);
+                interactive_recording = true;
                 replay_status(ReplayState::Recording);
+            } else if (interactive_recording) {
+                end_interactive_recording(true);
             } else if (route && !route->playback()) {
                 session.set_route(nullptr);
                 const bool ok=route->finish(true);
@@ -764,6 +776,10 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
             } else replay_status(ReplayState::Failed,"no recording is active");
             continue;
         }
+        // State changes start a fresh timeline. Seal the interactive segment
+        // first so a local recording never disables the player's save controls.
+        if ((t == Msg::SaveState || t == Msg::LoadState) && interactive_recording)
+            end_interactive_recording(true);
         if ((t == Msg::SaveState || t == Msg::LoadState) && (a.netplay || (route && !taken_over))) {
             // A match starts from a cold boot and is never rewound by a player.
             StateDoneMsg d{};
@@ -831,7 +847,8 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         // next (the runner reads nothing from the hub mid-frame).
         session.begin_frame_accessories();
         if (route && !taken_over && !route->begin(g.presentation_width,g.presentation_height)) {
-            code = exiting(sock,route->exit_code(),route->error()); break;
+            if (interactive_recording) end_interactive_recording(false);
+            else { code = exiting(sock,route->exit_code(),route->error()); break; }
         }
         FrameDoneMsg done{};
         done.h.type = Msg::FrameDone;
@@ -889,7 +906,8 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         }
         done.game_frame = sink.last_game_frame;
         if (route && !taken_over && done.result == RCORE_OK && !route->end()) {
-            code = exiting(sock,route->exit_code(),route->error()); break;
+            if (interactive_recording) end_interactive_recording(false);
+            else { code = exiting(sock,route->exit_code(),route->error()); break; }
         }
         mirror_saves();
         send_msg_sized(sock, done, frame_done_size);
@@ -915,6 +933,7 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         if (route && !taken_over && route->done()) break;
     }
     session.set_route(nullptr);
+    if (interactive_recording) end_interactive_recording(!code && !sink.faults);
     if (route && !route->finish(!code && !sink.faults,user_quit)) {
         if (!code) code = exiting(sock,route->exit_code(),route->error());
     }

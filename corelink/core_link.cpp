@@ -326,9 +326,11 @@ bool CoreLink::states_supported() const {
 bool CoreLink::replays_supported() const {
     return states_supported() && link_has_replays(identity_.protocol_minor);
 }
-bool CoreLink::request_recording(bool record, const fs::path& path) {
+bool CoreLink::request_recording(bool record, const fs::path& path, bool diagnostics) {
     if (!replays_supported() || !can_grant()) return false;
-    ReplayControlMsg m{}; m.h.type=Msg::ReplayControl; m.record=record ? 1 : 0;
+    ReplayControlMsg m{};
+    m.h.type = Msg::ReplayControl;
+    m.record = record ? (diagnostics ? 2 : 1) : 0;
     const auto p=path_utf8(path);
     if (p.size()>=sizeof m.path) return false;
     std::memcpy(m.path,p.c_str(),p.size()+1);
