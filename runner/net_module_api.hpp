@@ -41,6 +41,9 @@ namespace retro::runner {
 struct NetModuleApi {
 #define RETRO_NM_FIELD(n) decltype(&::n) n;
     RETRO_NET_MODULE_SYMBOLS(RETRO_NM_FIELD)
+#if defined(RNET_RB_HAS_CONFIRMED_DIGEST)
+    decltype(&::rnet_rb_driver_confirmed_digest) confirmed_digest;
+#endif
 #undef RETRO_NM_FIELD
 };
 extern NetModuleApi g_nm;

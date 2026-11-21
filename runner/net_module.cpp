@@ -65,6 +65,10 @@ bool net_module_load(const std::string& path, std::string* error) {
     RETRO_NET_MODULE_SYMBOLS(RETRO_NM_SYM)
 #undef RETRO_NM_SYM
     if (!ok) return bail("missing symbols:" + missing);
+#if defined(RNET_RB_HAS_CONFIRMED_DIGEST)
+    api.confirmed_digest = reinterpret_cast<decltype(api.confirmed_digest)>(
+        dlsym(h, "rnet_rb_driver_confirmed_digest"));
+#endif
 
     g_nm = api;
     g_info = NetModuleInfo{path, m.abi_version, m.abi_minor, m.wire_version, m.features,

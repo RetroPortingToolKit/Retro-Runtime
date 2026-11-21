@@ -272,6 +272,13 @@ void HostSession::append_cartridge_save_identity(std::vector<std::string>& conte
     }
 }
 
+const SaveRegion* HostSession::cartridge_eeprom() const {
+    for (const SaveRegion& r : regions_) {
+        if (r.kind == RCORE_SAVE_EEPROM && r.id == "eeprom") return &r;
+    }
+    return nullptr;
+}
+
 void HostSession::persist_save_regions() const {
     for (const SaveRegion& r : regions_) {
         if (!r.file) continue;

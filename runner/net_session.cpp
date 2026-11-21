@@ -1,13 +1,19 @@
 #include "net_session.hpp"
+#include "host_session.hpp"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <deque>
+#include <fstream>
+#include <iterator>
 
 #if defined(RETRO_RUNNER_NETPLAY)
 extern "C" {
 #include "recomp_net/rb_driver.h"
+#include "recomp_net/hash_confirm.h"
 #include "recomp_net/session.h"
 #include "recomp_net/startup_profiles.h"
 }
@@ -59,6 +65,107 @@ void generic_to_pad(const rcore_net_row& r, rcore_pad& p) {
 
 #if defined(RETRO_RUNNER_NETPLAY)
 
+#if defined(RNET_RB_HAS_CONFIRMED_DIGEST)
+namespace {
+
+// A revision is the complete native EEPROM after its tick. The same bytes
+// apply to subsequent ticks until another revision is observed.
+struct ConfirmedEeprom {
+    struct Revision {
+        std::uint32_t tick;
+        std::vector<std::uint8_t> bytes;
+    };
+    using Revisions = std::deque<Revision>;
+
+    const SaveRegion& source;
+    fs::path path, pending_path;
+    std::vector<std::uint8_t> committed;
+    Revisions revisions;
+
+    ConfirmedEeprom(const SaveRegion& region, fs::path target, std::uint32_t session_id)
+        : source(region), path(std::move(target)), pending_path(path),
+          committed(region.data, region.data + region.size) {
+        pending_path += ".netplay-" + std::to_string(session_id) + "-" +
+                        std::to_string(steady_ms()) + ".tmp";
+    }
+
+    bool disk_matches() const {
+        std::error_code ec;
+        const bool exists = fs::exists(path, ec);
+        if (ec) return false;
+        if (!exists)
+            return std::all_of(committed.begin(), committed.end(),
+                [&](std::uint8_t byte) { return byte == source.erase_value; });
+        std::ifstream in(path, std::ios::binary);
+        std::vector<std::uint8_t> bytes(committed.size());
+        return in.read(reinterpret_cast<char*>(bytes.data()),
+                       static_cast<std::streamsize>(bytes.size())) &&
+               in.peek() == std::char_traits<char>::eof() && !in.bad() && bytes == committed;
+    }
+
+    void sample(std::uint32_t tick) {
+        const auto& last = revisions.empty() ? committed : revisions.back().bytes;
+        if (std::memcmp(source.data, last.data(), source.size) != 0)
+            revisions.push_back({tick, {source.data, source.data + source.size}});
+        // Keep the most recent revision before the oldest digest that can
+        // still be proven. Its bytes still apply at the start of the window.
+        if (tick >= RNET_HC_RING)
+            while (revisions.size() > 1 && revisions[1].tick <= tick - RNET_HC_RING)
+                revisions.pop_front();
+    }
+
+    void rewind(std::uint32_t next_tick) {
+        while (!revisions.empty() && revisions.back().tick >= next_tick)
+            revisions.pop_back();
+    }
+
+    Revisions::iterator settled(std::uint32_t through) {
+        // The guest programs its EEPROM a block at a time. A confirmed
+        // formatting sequence can change it for hundreds of consecutive
+        // fields. Wait for the entire burst to stop before replacing the
+        // offline save with any part of it.
+        constexpr std::uint32_t quiet_ticks = 30;
+        const auto after = std::upper_bound(revisions.begin(), revisions.end(), through,
+            [](std::uint32_t tick, const Revision& revision) { return tick < revision.tick; });
+        if (after == revisions.begin()) return revisions.end();
+        const auto revision = std::prev(after);
+        return through - revision->tick >= quiet_ticks ? revision : revisions.end();
+    }
+
+    bool commit(Revisions::iterator revision, std::uint32_t through, std::string& error) {
+        if (revision->bytes != committed) {
+            std::error_code ec;
+            fs::create_directories(path.parent_path(), ec);
+            if (ec) {
+                error = "cannot create the campaign save directory: " + ec.message();
+                return false;
+            }
+            std::ofstream out(pending_path, std::ios::binary | std::ios::trunc);
+            out.write(reinterpret_cast<const char*>(revision->bytes.data()),
+                      static_cast<std::streamsize>(revision->bytes.size()));
+            out.close();
+            if (!out) error = "cannot write the confirmed campaign save";
+            else if (!disk_matches()) error = "the host campaign save changed during this match";
+            else {
+                fs::rename(pending_path, path, ec);
+                if (ec) error = "cannot replace the campaign save: " + ec.message();
+            }
+            if (!error.empty()) {
+                fs::remove(pending_path, ec);
+                return false;
+            }
+            committed = revision->bytes;
+            std::fprintf(stderr, "runner_netplay: saved confirmed campaign EEPROM through tick %u\n",
+                         static_cast<unsigned>(through));
+        }
+        revisions.erase(revisions.begin(), std::next(revision));
+        return true;
+    }
+};
+
+} // namespace
+#endif
+
 struct NetSession::Impl {
     const LoadedCore* core = nullptr;
     const rcore_core_api* api = nullptr;
@@ -78,6 +185,22 @@ struct NetSession::Impl {
     std::uint32_t profile = 0, profile_transcript = 0;
     std::string profile_qualification;
     NetStats stats;
+#if defined(RNET_RB_HAS_CONFIRMED_DIGEST)
+    std::optional<ConfirmedEeprom> eeprom;
+
+    void persist_confirmed_eeprom() {
+        if (!eeprom || eeprom->revisions.empty() || !ended.empty()) return;
+        const std::uint32_t through = rnet_rb_driver_confirmed_through(drv);
+        const auto revision = eeprom->settled(through);
+        if (revision == eeprom->revisions.end()) return;
+#if defined(RETRO_RUNNER_NETPLAY_MODULE)
+        const auto proof = g_nm.confirmed_digest;
+#else
+        const auto proof = rnet_rb_driver_confirmed_digest;
+#endif
+        if (proof(drv, through, nullptr)) eeprom->commit(revision, through, ended);
+    }
+#endif
 
     void from_pad(const rcore_pad& pad, rcore_net_row& row) const {
         if (codec) api->net_row_from_pad(&pad, &row);
@@ -105,7 +228,12 @@ struct NetSession::Impl {
         return of(c)->api->rb_snap_save(t) == RCORE_OK ? 1 : 0;
     }
     static int snap_load(void* c, std::uint32_t t) {
-        return of(c)->api->rb_snap_load(t) == RCORE_OK ? 1 : 0;
+        Impl* s = of(c);
+        if (s->api->rb_snap_load(t) != RCORE_OK) return 0;
+#if defined(RNET_RB_HAS_CONFIRMED_DIGEST)
+        if (s->eeprom) s->eeprom->rewind(t);
+#endif
+        return 1;
     }
     static int snap_has(void* c, std::uint32_t t) { return of(c)->api->rb_snap_has(t) ? 1 : 0; }
     static int snap_oldest(void* c, std::uint32_t* o) {
@@ -240,6 +368,8 @@ bool NetSession::prepare(const LoadedCore& core, const NetParams& p,
     Impl& s = *impl_;
     auto fail = [&](const std::string& why) { if (error) *error = why; return false; };
     if (s.session) return fail("execution profile startup was already prepared");
+    if (!p.confirmed_eeprom.empty() && p.slot != 0)
+        return fail("only the host can save the online campaign");
     if (!RCORE_HAS(core.api, rcore_core_api, execution_profiles) ||
         !core.api->execution_profiles) return true;
     const auto* offer = core.api->execution_profiles();
@@ -290,7 +420,8 @@ bool NetSession::prepare(const LoadedCore& core, const NetParams& p,
     return true;
 }
 
-bool NetSession::start(const LoadedCore& core, const NetParams& p, std::string* error) {
+bool NetSession::start(const LoadedCore& core, const NetParams& p, std::string* error,
+                       const SaveRegion* eeprom) {
     auto fail = [&](const std::string& m) {
         if (error) *error = m;
         return false;
@@ -329,6 +460,37 @@ bool NetSession::start(const LoadedCore& core, const NetParams& p, std::string* 
         p.slot >= p.slots)
         return fail("seat " + std::to_string(p.slot) + " of " + std::to_string(p.slots) +
                     " is not a seat");
+#if defined(RNET_RB_HAS_CONFIRMED_DIGEST)
+    s.eeprom.reset();
+#endif
+    if (!p.confirmed_eeprom.empty()) {
+        if (p.slot != 0) return fail("only the host can save the online campaign");
+        if (!eeprom || !eeprom->data || !eeprom->size)
+            return fail("this core did not provide the campaign EEPROM");
+#if defined(RNET_RB_HAS_CONFIRMED_DIGEST)
+#if defined(RETRO_RUNNER_NETPLAY_MODULE)
+        if (!g_nm.confirmed_digest) return fail("this netplay module cannot confirm campaign saves");
+#endif
+        std::error_code ec;
+        const auto absolute = fs::absolute(p.confirmed_eeprom, ec);
+        if (ec) return fail("the campaign save path is invalid: " + ec.message());
+        const auto target = fs::weakly_canonical(absolute, ec);
+        if (ec) return fail("the campaign save path is invalid: " + ec.message());
+        if (eeprom->file) {
+            const auto sandbox_absolute = fs::absolute(*eeprom->file, ec);
+            if (ec) return fail("the match save path is invalid: " + ec.message());
+            const auto sandbox = fs::weakly_canonical(sandbox_absolute, ec);
+            if (ec) return fail("the match save path is invalid: " + ec.message());
+            if (target == sandbox || fs::equivalent(target, sandbox, ec))
+                return fail("the host campaign and the match must use separate save files");
+        }
+        s.eeprom.emplace(*eeprom, target, p.session_id);
+        if (!s.eeprom->disk_matches())
+            return fail("the host campaign save differs from the save staged for this match");
+#else
+        return fail("this runner was built without confirmed campaign save support");
+#endif
+    }
     s.codec = RCORE_HAS(a, rcore_core_api, net_row_to_pad) && a->net_row_from_pad &&
               a->net_row_to_pad;
     if (!s.codec) {
@@ -466,6 +628,10 @@ NetSession::Admit NetSession::poll() {
     // can arrive in one pump. The driver can finish an already agreed stop
     // with the wire down; reporting BYE first turned that into a false error.
     const auto admitted = rnet_rb_driver_poll_admit(s.drv);
+#if defined(RNET_RB_HAS_CONFIRMED_DIGEST)
+    s.persist_confirmed_eeprom();
+    if (!s.ended.empty()) return Admit::Stall;
+#endif
     if (drained()) return Admit::Stall;
     const bool running = rnet_session_is_running(s.session) != 0;
     if (running) s.was_running = true;
@@ -494,7 +660,13 @@ void NetSession::finish(Admit a) {
     if (!s.drv) return;
     if (a == Admit::Live) ++s.stats.live;
     if (a == Admit::Replay) ++s.stats.replayed;
+#if defined(RNET_RB_HAS_CONFIRMED_DIGEST)
+    if (s.eeprom) s.eeprom->sample(s.last_tick);
+#endif
     rnet_rb_driver_finish_frame(s.drv);
+#if defined(RNET_RB_HAS_CONFIRMED_DIGEST)
+    s.persist_confirmed_eeprom();
+#endif
 }
 
 void NetSession::wait(int ms) {
@@ -558,7 +730,7 @@ bool NetSession::prepare(const LoadedCore&, const NetParams&, rcore_init_params&
     if (error) *error = "this runner was built without recomp-net";
     return false;
 }
-bool NetSession::start(const LoadedCore&, const NetParams&, std::string* error) {
+bool NetSession::start(const LoadedCore&, const NetParams&, std::string* error, const SaveRegion*) {
     if (error) *error = "this runner was built without recomp-net (RETRO_RUNTIME_RECOMP_NET_DIR)";
     return false;
 }

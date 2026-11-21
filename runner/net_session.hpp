@@ -19,11 +19,14 @@
 #include "core_library.hpp"
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
 
 namespace retro::runner {
+
+struct SaveRegion;
 
 struct NetParams {
     std::string module_path;   // the netplay module (module builds only)
@@ -37,6 +40,7 @@ struct NetParams {
     std::string peer;          // guests: the host (or relay); host: empty
     bool via_relay = false;    // every peer dials `peer`, a server relay
     std::uint64_t epoch_s = 0; // the session's agreed clock epoch (Unix seconds)
+    std::filesystem::path confirmed_eeprom; // opt-in host campaign destination
     // The match key's content lines (what every peer must hold identically):
     // content hashes, NETPLAY options, accessories. The runner adds its own.
     std::vector<std::string> content;
@@ -63,7 +67,8 @@ public:
     // Opens the transport and starts the driver. The core must be loaded and
     // at the boundary frame 1 runs from. False with *error saying why (a core
     // without ROLLBACK, a bad address, the driver's refusal).
-    bool start(const LoadedCore& core, const NetParams& p, std::string* error);
+    bool start(const LoadedCore& core, const NetParams& p, std::string* error,
+               const SaveRegion* eeprom = nullptr);
 
     enum class Admit { Stall, Live, Replay };
     // The local pad for the frames to come (sampled into the session).

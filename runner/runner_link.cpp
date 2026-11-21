@@ -692,7 +692,8 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
                                   file_sha256_hex(utf8_path(a.tpak_roms[seat])) + " save " + save);
         }
         std::string nerr;
-        if (!ns.start(core, net, &nerr)) return exiting(sock, 2, "netplay: " + nerr);
+        if (!ns.start(core, net, &nerr, session.cartridge_eeprom()))
+            return exiting(sock, 2, "netplay: " + nerr);
     }
 
     EmptyMsg ready{};
@@ -898,7 +899,13 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
                 const rcore_result rc = adm == NetSession::Admit::Live
                                             ? timed(core.api->run_frame)
                                             : timed(core.api->run_frame_resim);
-                ns.finish(adm);
+                if (rc == RCORE_OK) ns.finish(adm);
+                const std::string end = ns.ended();
+                if (!end.empty()) {
+                    code = exiting(sock, 4, "netplay: " + end);
+                    quit = true;
+                    break;
+                }
                 if (rc != RCORE_OK || adm == NetSession::Admit::Live) {
                     done.result = rc;
                     break;

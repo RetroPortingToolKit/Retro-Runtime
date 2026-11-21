@@ -515,6 +515,11 @@ int main(int argc, char** argv) {
         else if (a == "--net-peer") { netplay = true; net.peer = val(); }
         else if (a == "--net-relay") { netplay = true; net.peer = val(); net.via_relay = true; }
         else if (a == "--net-content") { netplay = true; net.content.push_back(val()); }
+        else if (a == "--net-confirmed-eeprom") {
+            netplay = true;
+            net.confirmed_eeprom = retro::corelink::utf8_path(val());
+            if (net.confirmed_eeprom.empty()) die("--net-confirmed-eeprom requires a path");
+        }
         else if (a == "--opt") {
             const std::string kv = val();
             const auto eq = kv.find('=');
@@ -869,7 +874,7 @@ int main(int argc, char** argv) {
             net.content.push_back("tpak" + std::to_string(seat + 1) + " rom " + rs + " save " +
                                   (ss.empty() ? std::string("none") : ss));
         }
-        if (!ns.start(core, net, &err)) die("netplay: " + err);
+        if (!ns.start(core, net, &err, session.cartridge_eeprom())) die("netplay: " + err);
         const std::uint64_t target = frames;
         std::uint64_t live = 0;
         bool quiescing = false, ok_net = true;
@@ -907,6 +912,10 @@ int main(int argc, char** argv) {
                 break;
             }
             ns.finish(a);
+            if (!(end = ns.ended()).empty()) {
+                ok_net = false;
+                break;
+            }
             if (core.api->state_hash) tick_hash[ns.tick()] = core.api->state_hash();
             if (a == NetSession::Admit::Live) {
                 ++live;
