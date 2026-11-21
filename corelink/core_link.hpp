@@ -185,6 +185,7 @@ public:
     bool request_recording(bool record, const fs::path& path = {}, bool diagnostics = false);
     bool replay_pending() const { return replay_pending_; }
     const ReplayStatusMsg& replay_status() const { return replay_status_; }
+    bool netplay_waiting() const { return netplay_waiting_; }
 
     // Accessory data (link 2.1, rcore rev 7; docs/CORE_ABI.md "Accessory
     // data"). send_accessory() queues one whole message for the accessory at
@@ -260,6 +261,7 @@ private:
     bool have_frame_ = false;
     bool state_pending_ = false;
     bool replay_pending_ = false;
+    bool netplay_waiting_ = false;
     ReplayStatusMsg replay_status_{};
     StateResult state_request_;
     std::optional<StateResult> state_result_;

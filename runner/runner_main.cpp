@@ -514,6 +514,7 @@ int main(int argc, char** argv) {
         else if (a == "--net-bind") { netplay = true; net.bind = val(); }
         else if (a == "--net-peer") { netplay = true; net.peer = val(); }
         else if (a == "--net-relay") { netplay = true; net.peer = val(); net.via_relay = true; }
+        else if (a == "--net-recover-connection") { netplay = true; net.recover_connection = true; }
         else if (a == "--net-content") { netplay = true; net.content.push_back(val()); }
         else if (a == "--net-confirmed-eeprom") {
             netplay = true;

@@ -39,6 +39,7 @@ struct NetParams {
     std::string bind = "0.0.0.0:7777";
     std::string peer;          // guests: the host (or relay); host: empty
     bool via_relay = false;    // every peer dials `peer`, a server relay
+    bool recover_connection = false; // preserve a running pair through packet loss
     std::uint64_t epoch_s = 0; // the session's agreed clock epoch (Unix seconds)
     std::filesystem::path confirmed_eeprom; // opt-in host campaign destination
     // The match key's content lines (what every peer must hold identically):
@@ -85,6 +86,7 @@ public:
     // The frame (tick) the rows last published belong to.
     std::uint32_t tick() const;
     bool in_resim() const;
+    bool waiting_for_peer() const;
 
     // The match is over: refused, a peer gone, or the transport down. Empty
     // while it runs; otherwise one sentence.

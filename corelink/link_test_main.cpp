@@ -325,7 +325,17 @@ int main(int argc, char** argv) {
             }
             die("grant " + std::to_string(k) + " refused");
         }
-        while (link.state() == LinkState::Ready && link.frames_done() < k) link.pump(100);
+        bool was_waiting = link.netplay_waiting();
+        while (link.state() == LinkState::Ready && link.frames_done() < k) {
+            link.pump(100);
+            const bool waiting = link.netplay_waiting();
+            if (waiting != was_waiting) {
+                std::printf("netplay-waiting: %d after field %llu\n", int(waiting),
+                            static_cast<unsigned long long>(link.frames_done()));
+                std::fflush(stdout);
+                was_waiting = waiting;
+            }
+        }
         print_notifies();
         const bool clean_route_end = expect_route_end && link.state()==LinkState::Ended && !link.exit_code();
         if (link.state() != LinkState::Ready && !clean_route_end) ok = false;

@@ -65,6 +65,16 @@ void generic_to_pad(const rcore_net_row& r, rcore_pad& p) {
 
 #if defined(RETRO_RUNNER_NETPLAY)
 
+static bool connection_recovery_supported() {
+#if !defined(RNET_RB_HAS_PEER_RECONNECTED)
+    return false;
+#elif defined(RETRO_RUNNER_NETPLAY_MODULE)
+    return g_nm.peer_reconnected != nullptr;
+#else
+    return true;
+#endif
+}
+
 #if defined(RNET_RB_HAS_CONFIRMED_DIGEST)
 namespace {
 
@@ -181,6 +191,8 @@ struct NetSession::Impl {
     std::string ended;
     std::uint32_t started_ms = 0;
     bool was_running = false;
+    bool waiting_for_peer = false;
+    std::uint32_t silence_started_ms = 0, paused_driver_ms = 0;
     bool profile_agreed = false;
     std::uint32_t profile = 0, profile_transcript = 0;
     std::string profile_qualification;
@@ -310,7 +322,9 @@ struct NetSession::Impl {
     static void log(void*, const char* line) {
         if (line) std::fputs(line, stderr);
     }
-    static std::uint32_t now_ms(void*) { return steady_ms(); }
+    static std::uint32_t now_ms(void* c) {
+        return steady_ms() - of(c)->paused_driver_ms;
+    }
 
     // ---- the session's host vtable: the local pad ----
     static void sample_local(rnet_u32 tick, RNetInputSample* out, void* c) {
@@ -370,6 +384,8 @@ bool NetSession::prepare(const LoadedCore& core, const NetParams& p,
     if (s.session) return fail("execution profile startup was already prepared");
     if (!p.confirmed_eeprom.empty() && p.slot != 0)
         return fail("only the host can save the online campaign");
+    if (p.recover_connection && p.slots != 2)
+        return fail("connection recovery requires a two-player match");
     if (!RCORE_HAS(core.api, rcore_core_api, execution_profiles) ||
         !core.api->execution_profiles) return true;
     const auto* offer = core.api->execution_profiles();
@@ -386,6 +402,8 @@ bool NetSession::prepare(const LoadedCore& core, const NetParams& p,
 #if defined(RETRO_RUNNER_NETPLAY_MODULE)
     if (!net_module_load(p.module_path, error)) return false;
 #endif
+    if (p.recover_connection && !connection_recovery_supported())
+        return fail("this netplay build cannot restore interrupted rollback exchanges");
     s.p = p;
     s.core = &core;
     s.slot = p.slot;
@@ -432,7 +450,8 @@ bool NetSession::start(const LoadedCore& core, const NetParams& p, std::string* 
     if (s.profile_agreed && (s.core != &core || s.p.slot != p.slot || s.p.slots != p.slots ||
         s.p.occupied != p.occupied || s.p.delay != p.delay || s.p.prediction != p.prediction ||
         s.p.session_id != p.session_id || s.p.bind != p.bind || s.p.peer != p.peer ||
-        s.p.via_relay != p.via_relay || s.p.epoch_s != p.epoch_s))
+        s.p.via_relay != p.via_relay || s.p.epoch_s != p.epoch_s ||
+        s.p.recover_connection != p.recover_connection))
         return fail("netplay configuration changed after startup profile agreement");
     if (!s.profile_agreed && RCORE_HAS(a, rcore_core_api, execution_profiles) &&
         a->execution_profiles && a->execution_profiles())
@@ -449,6 +468,8 @@ bool NetSession::start(const LoadedCore& core, const NetParams& p, std::string* 
                      m->wire_version, m->build_id.c_str());
     }
 #endif
+    if (p.recover_connection && !connection_recovery_supported())
+        return fail("this netplay build cannot restore interrupted rollback exchanges");
     if (!(core.info->capabilities & RCORE_CAP_DETERMINISTIC))
         return fail("the core does not declare DETERMINISTIC, so it cannot play netplay");
     if (!(core.info->capabilities & RCORE_CAP_ROLLBACK) || !a->rb_snap_save || !a->rb_snap_load ||
@@ -460,6 +481,8 @@ bool NetSession::start(const LoadedCore& core, const NetParams& p, std::string* 
         p.slot >= p.slots)
         return fail("seat " + std::to_string(p.slot) + " of " + std::to_string(p.slots) +
                     " is not a seat");
+    if (p.recover_connection && p.slots != 2)
+        return fail("connection recovery requires a two-player match");
 #if defined(RNET_RB_HAS_CONFIRMED_DIGEST)
     s.eeprom.reset();
 #endif
@@ -526,6 +549,8 @@ bool NetSession::start(const LoadedCore& core, const NetParams& p, std::string* 
     std::uint32_t content_fp = fnv1a("slots " + std::to_string(p.slots) + " occupied " +
                                      std::to_string(p.occupied) + " epoch " +
                                      std::to_string(p.epoch_s));
+    if (p.recover_connection)
+        content_fp = fnv1a("recover_connection 1\n", content_fp);
     for (const std::string& l : p.content) {
         content_fp = fnv1a(l + "\n", content_fp);
         std::fprintf(stderr, "runner_netplay: IDENT content %s\n", l.c_str());
@@ -624,6 +649,38 @@ NetSession::Admit NetSession::poll() {
         s.ended = "execution profile agreement violated; live switching is forbidden";
         return Admit::Stall;
     }
+    const bool running = rnet_session_is_running(s.session) != 0;
+    const bool peer_left = rnet_session_peer_disconnected(s.session, 0) != 0;
+    // Leave the current seats, input history and outstanding rollback intact.
+    // The session pump keeps retransmitting while the simulation waits. Stop
+    // advancing rollback deadlines during a quiet link so an open correction
+    // can finish against the same peer when traffic returns.
+    constexpr std::uint32_t kQuietLinkMs = 500;
+    if (s.p.recover_connection && s.last_tick != 0 && running && !peer_left &&
+        rnet_session_peer_disconnected(s.session, kQuietLinkMs) &&
+        rnet_rb_driver_quiesce_state(s.drv) == RNET_RB_QUIESCE_NONE) {
+        if (!s.waiting_for_peer) {
+            s.waiting_for_peer = true;
+            s.silence_started_ms = steady_ms();
+            std::fputs("runner_netplay: waiting for the original peer\n", stderr);
+        }
+        ++s.stats.stalls;
+        return Admit::Stall;
+    }
+    if (s.waiting_for_peer) {
+        s.waiting_for_peer = false;
+        s.paused_driver_ms += steady_ms() - s.silence_started_ms;
+        if (running && !peer_left) {
+#if defined(RNET_RB_HAS_PEER_RECONNECTED)
+#if defined(RETRO_RUNNER_NETPLAY_MODULE)
+            g_nm.peer_reconnected(s.drv);
+#else
+            rnet_rb_driver_peer_reconnected(s.drv);
+#endif
+#endif
+            std::fputs("runner_netplay: connection restored to the original peer\n", stderr);
+        }
+    }
     // Drain received control first: a final QUIESCE acknowledgement and BYE
     // can arrive in one pump. The driver can finish an already agreed stop
     // with the wire down; reporting BYE first turned that into a false error.
@@ -633,18 +690,17 @@ NetSession::Admit NetSession::poll() {
     if (!s.ended.empty()) return Admit::Stall;
 #endif
     if (drained()) return Admit::Stall;
-    const bool running = rnet_session_is_running(s.session) != 0;
     if (running) s.was_running = true;
     if (!running && !s.was_running && steady_ms() - s.started_ms > 30000) {
         s.ended = "no peer answered within 30 s";
         return Admit::Stall;
     }
-    if (s.was_running && !running) {
+    if (s.was_running && (!running || (s.p.recover_connection && peer_left))) {
         // A peer's BYE (or the transport closing) stops the session at once.
         s.ended = "a player left the match";
         return Admit::Stall;
     }
-    if (s.was_running && rnet_session_peer_disconnected(s.session, 5000)) {
+    if (s.was_running && !s.p.recover_connection && rnet_session_peer_disconnected(s.session, 5000)) {
         s.ended = "a player left the match (no packets for 5 s)";
         return Admit::Stall;
     }
@@ -680,6 +736,7 @@ const rcore_pad& NetSession::seat_pad(std::uint32_t seat) const {
 
 std::uint32_t NetSession::tick() const { return impl_->last_tick; }
 bool NetSession::in_resim() const { return impl_->resim; }
+bool NetSession::waiting_for_peer() const { return impl_->waiting_for_peer; }
 std::string NetSession::ended() const { return impl_->ended; }
 
 NetStats NetSession::stats() const {
@@ -741,6 +798,7 @@ void NetSession::wait(int) {}
 const rcore_pad& NetSession::seat_pad(std::uint32_t seat) const { return impl_->pads[seat % RCORE_MAX_SEATS]; }
 std::uint32_t NetSession::tick() const { return 0; }
 bool NetSession::in_resim() const { return false; }
+bool NetSession::waiting_for_peer() const { return false; }
 std::string NetSession::ended() const { return "not built with netplay"; }
 NetStats NetSession::stats() const { return {}; }
 void NetSession::request_quiesce() {}

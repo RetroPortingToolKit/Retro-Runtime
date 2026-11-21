@@ -44,6 +44,9 @@ struct NetModuleApi {
 #if defined(RNET_RB_HAS_CONFIRMED_DIGEST)
     decltype(&::rnet_rb_driver_confirmed_digest) confirmed_digest;
 #endif
+#if defined(RNET_RB_HAS_PEER_RECONNECTED)
+    decltype(&::rnet_rb_driver_peer_reconnected) peer_reconnected;
+#endif
 #undef RETRO_NM_FIELD
 };
 extern NetModuleApi g_nm;

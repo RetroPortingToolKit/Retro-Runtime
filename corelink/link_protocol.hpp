@@ -48,7 +48,9 @@ constexpr std::uint32_t kProtocolMajor = 2;
 // 2.5: between-frame replay recording controls and authoritative status.
 // 2.6: Grant appends presentation-only permission to omit unobserved video.
 // 2.7: optional Grant flag enables exact RGBA8 horizontal-pair reconstruction.
-constexpr std::uint32_t kProtocolMinor = 7;
+// 2.8: NetplayWaiting reports a recoverable interruption during a live match.
+constexpr std::uint32_t kProtocolMinor = 8;
+constexpr bool link_has_netplay_waiting(std::uint32_t peer_minor) { return peer_minor >= 8; }
 constexpr bool link_has_cpu_pixel_pairs(std::uint32_t peer_minor) { return peer_minor >= 7; }
 constexpr bool link_has_video_demand(std::uint32_t peer_minor) { return peer_minor >= 6; }
 constexpr bool link_has_replays(std::uint32_t peer_minor) { return peer_minor >= 5; }
@@ -161,6 +163,7 @@ enum class Msg : std::uint32_t {
     GpuFrame = 11,       // accepted GPU picture, before its FrameDone
     GpuUnregister = 12,  // retire a generation after all GPU users finish
     ReplayStatus = 13,
+    NetplayWaiting = 14,
     // hub -> runner
     SavesFilled = 64, // every region filled from its file; the seats at power-on
     Grant = 65,       // run exactly one frame, with these pads
@@ -177,6 +180,11 @@ enum class Msg : std::uint32_t {
 struct MsgHeader {
     Msg type;
     std::uint32_t size; // whole packet, header included
+};
+
+struct NetplayWaitingMsg {
+    MsgHeader h;
+    std::uint32_t waiting;
 };
 
 enum class ReplayState : std::uint32_t { Idle, Recording, Saved, Playing, TakenOver, Failed, Complete, Stopped };

@@ -270,6 +270,11 @@ void CoreLink::handle_packet(const std::vector<unsigned char>& buf,
             replay_status_=m; replay_pending_=false;
             break;
         }
+        case Msg::NetplayWaiting: {
+            NetplayWaitingMsg m{};
+            if (as_msg(buf, m)) netplay_waiting_ = m.waiting != 0;
+            break;
+        }
         case Msg::StateDone: {
             StateDoneMsg m{};
             if (!as_msg(buf, m) || !state_pending_) break;
@@ -461,6 +466,7 @@ void CoreLink::reap(int timeout_ms) {
 }
 
 void CoreLink::on_ended(int code) {
+    netplay_waiting_ = false;
     exit_code_ = code;
     state_ = LinkState::Ended;
     outstanding_ = 0;

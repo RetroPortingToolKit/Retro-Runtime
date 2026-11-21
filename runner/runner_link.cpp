@@ -873,8 +873,17 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
             // paces the hub -- while still hearing the hub's Quit.
             ns.stage_local(g.pads[0]);
             bool quit = false;
+            bool reported_waiting = false;
             for (;;) {
                 const NetSession::Admit adm = ns.poll();
+                const bool waiting = ns.waiting_for_peer();
+                if (waiting != reported_waiting && link_has_netplay_waiting(session_minor)) {
+                    NetplayWaitingMsg m{};
+                    m.h.type = Msg::NetplayWaiting;
+                    m.waiting = waiting;
+                    send_msg(sock, m);
+                    reported_waiting = waiting;
+                }
                 if (adm == NetSession::Admit::Stall) {
                     const std::string end = ns.ended();
                     if (!end.empty()) {

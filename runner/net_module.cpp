@@ -69,6 +69,10 @@ bool net_module_load(const std::string& path, std::string* error) {
     api.confirmed_digest = reinterpret_cast<decltype(api.confirmed_digest)>(
         dlsym(h, "rnet_rb_driver_confirmed_digest"));
 #endif
+#if defined(RNET_RB_HAS_PEER_RECONNECTED)
+    api.peer_reconnected = reinterpret_cast<decltype(api.peer_reconnected)>(
+        dlsym(h, "rnet_rb_driver_peer_reconnected"));
+#endif
 
     g_nm = api;
     g_info = NetModuleInfo{path, m.abi_version, m.abi_minor, m.wire_version, m.features,
