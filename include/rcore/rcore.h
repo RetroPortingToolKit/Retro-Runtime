@@ -48,7 +48,7 @@ extern "C" {
 
 #define RCORE_ABI_MAJOR 0u /* 0 = draft; the first implemented contract is 1 */
 #define RCORE_ABI_MINOR 0u
-#define RCORE_DRAFT_REVISION 15u /* draft-only counter; see docs/CORE_ABI.md */
+#define RCORE_DRAFT_REVISION 16u /* draft-only counter; see docs/CORE_ABI.md */
 
 #if defined(_WIN32)
 #  define RCORE_EXPORT __declspec(dllexport)
@@ -738,6 +738,11 @@ typedef struct rcore_core_api {
      * Optional. NULL = legacy startup policy, no profile negotiation. An old
      * runner omits PROFILE_AGREED and the core keeps its safe default. */
     const rcore_execution_profiles* (*execution_profiles)(void);
+    /* Rev 16. After load and before the first frame, the verified gameplay
+     * mod plan for the loaded content. The core owns the NUL-terminated value
+     * until unload. Empty means stock. NULL means the selection could not be
+     * verified. A core with no such query leaves this function pointer NULL. */
+    const char* (*resolved_mod_plan)(void);
 } rcore_core_api;
 
 /* The single exported symbol. Returns NULL when the core cannot serve

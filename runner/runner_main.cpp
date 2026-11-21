@@ -313,6 +313,7 @@ void print_version() {
                 "gl %d\n"
                 "game_package 1\n"
                 "describe 1\n"
+                "resolve_mod_plan 1\n"
                 "transfer_pak_seats %zu\n"
                 "netplay %d\n"
                 "netplay_module_abi %u\n"
@@ -427,6 +428,7 @@ int main(int argc, char** argv) {
     std::string link_handles;
     bool gl = false, strict = false, seat0 = true, list_options = false, link = false, unpaced = false;
     bool describe = false;
+    bool resolve_mod_plan = false;
     std::optional<std::uint64_t> replay_at;
     RouteArgs route_args;
     route_args.runner = retro::corelink::utf8_path(args[0]);
@@ -487,6 +489,7 @@ int main(int argc, char** argv) {
         else if (a == "--no-seats") seat0 = false;
         else if (a == "--list-options") list_options = true;
         else if (a == "--describe") describe = true;
+        else if (a == "--resolve-mod-plan") resolve_mod_plan = true;
         else if (a == "--replay-at") replay_at = num(val());
         else if (a == "--record-route") route_args.record = retro::corelink::utf8_path(val());
         else if (a == "--play-route") route_args.play = retro::corelink::utf8_path(val());
@@ -536,6 +539,8 @@ int main(int argc, char** argv) {
         }
     }
     if (core_path.empty()) die("--core <library> is required");
+    if (resolve_mod_plan && (describe || link || netplay || route_args.active() || load_state || replay_at))
+        die("--resolve-mod-plan requires a standalone cold load");
     if (route_args.active() && (netplay || load_state || replay_at || accessory_script ||
         std::any_of(vru_seats.begin(),vru_seats.end(),[](bool v){return v;}) ||
         std::any_of(tpak_roms.begin(),tpak_roms.end(),[](const auto& v){return !v.empty();})))
@@ -662,6 +667,10 @@ int main(int argc, char** argv) {
     if (describe) {
         print_description(core);
         return 0;
+    }
+    if (resolve_mod_plan && (!RCORE_HAS(core.api, rcore_core_api, resolved_mod_plan) ||
+                             !core.api->resolved_mod_plan)) {
+        die("this core cannot verify its gameplay mod plan");
     }
 
     // ---- link mode: the hub drives the session -----------------------------
@@ -795,6 +804,15 @@ int main(int argc, char** argv) {
     std::uint32_t nregs = 0;
     if (const rcore_result rc = core.api->load(&lp, &regs, &nregs); rc != RCORE_OK) {
         die("load -> " + std::to_string(rc));
+    }
+    if (resolve_mod_plan) {
+        const char* plan = core.api->resolved_mod_plan();
+        const std::optional<std::string> value = plan ? std::optional<std::string>(plan) : std::nullopt;
+        core.api->unload();
+        core.api->deinit();
+        if (!value) die("could not verify the selected gameplay mods; see the core log");
+        std::printf("mod-plan\t1\t%s\n", value->c_str());
+        return 0;
     }
     std::map<std::string, fs::path> save_files;
     // The core names seat N's regions tpakN and tpakN.rtc (docs/CORE_ABI.md).

@@ -261,6 +261,16 @@ the core's next step. **Run by hand 2026-09-26** on n64lle's generic
 `n64lle_core.so` (0.374.0, sidecar beside it): exit 0, 76 options, 16 enum
 values and 16 inputs, every record with its field count.
 
+## Resolve a gameplay mod plan
+
+`--resolve-mod-plan --core <library> --rom <image> [--package <library>]`
+loads the title with the supplied options and title state directory. It
+returns before the first emulated field and writes `mod-plan<TAB>1<TAB><value>`
+on success. An empty value denotes stock gameplay. The runner returns an
+error when the core cannot verify the selected mods. Pass the exact value to
+the peer startup option supported by that core, such as `netplay.mod_plan` on
+N64. The query does not open native save files.
+
 ## Netplay (headless, 2026-09-29)
 
 **Startup execution profiles (2026-10-14, rcore draft 10).** A core with
