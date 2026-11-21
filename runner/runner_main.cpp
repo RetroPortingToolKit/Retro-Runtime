@@ -832,6 +832,7 @@ int main(int argc, char** argv) {
         if (rom_sha.empty()) die("--rom " + rom + ": unreadable");
         net.content.push_back("rom " + rom_sha);
         if (!pkg_sha.empty()) net.content.push_back("package " + pkg_sha);
+        session.append_cartridge_save_identity(net.content);
         {
             std::uint32_t n = 0;
             const rcore_option* decl = core.api->options ? core.api->options(&n) : nullptr;

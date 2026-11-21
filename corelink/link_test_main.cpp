@@ -4,7 +4,8 @@
 // n64lle's rcore_probe on the same core and scenario (docs/CORE_LINK.md).
 //
 // Same flags as headless mode (a subset: no --replay-at; --package included),
-// plus --runner <path to retro-core-runner>, and savestates the way a host's
+// plus --runner <path to retro-core-runner>, --runner-arg VALUE for launch
+// arguments such as --net-slot, and savestates the way a host's
 // menu takes them (link 1.1):
 //   --state-save-at K:PATH   after frame K, save an envelope to PATH
 //   --state-load-at K:PATH   after frame K, load the envelope at PATH
@@ -139,6 +140,7 @@ int main(int argc, char** argv) {
             return 0;
         } else if (a == "--runner") spec.runner = utf8_path(val());
         else if (a == "--restart-route") restart_route=val();
+        else if (a == "--runner-arg") spec.extra_args.push_back(val());
         else if (a == "--core") spec.core = utf8_path(val());
         else if (a == "--rom") spec.rom = val();
         else if (a == "--package") spec.package = val();

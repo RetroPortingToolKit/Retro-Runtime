@@ -1,5 +1,6 @@
 #include "host_session.hpp"
 #include "route.hpp"
+#include "sha256.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -256,6 +257,13 @@ void HostSession::adopt_external_save_regions(const rcore_save_region* regions,
         s.data = memory[i];
         s.size = static_cast<size_t>(r.size);
         regions_.push_back(std::move(s));
+    }
+}
+
+void HostSession::append_cartridge_save_identity(std::vector<std::string>& content) const {
+    for (const SaveRegion& r : regions_) {
+        if (r.kind != RCORE_SAVE_BATTERY && r.kind != RCORE_SAVE_EEPROM) continue;
+        content.push_back("cartridge-save " + r.id + " " + sha256_hex(r.data, r.size));
     }
 }
 

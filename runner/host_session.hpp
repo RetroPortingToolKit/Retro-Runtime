@@ -115,6 +115,9 @@ public:
     void adopt_external_save_regions(const rcore_save_region* regions, std::uint32_t count,
                                      const std::vector<std::uint8_t*>& memory);
     const std::vector<SaveRegion>& save_regions() const { return regions_; }
+    // Peers must start on the same cartridge progress. Include the bytes
+    // actually mapped for the core, after the host fills the regions.
+    void append_cartridge_save_identity(std::vector<std::string>& content) const;
     // Write every file-backed region back, as a frontend persists saves.
     void persist_save_regions() const;
 

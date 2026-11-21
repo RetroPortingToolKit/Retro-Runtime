@@ -670,6 +670,7 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         if (rom_sha.empty()) return exiting(sock, 2, "netplay: the ROM is unreadable");
         net.content.push_back("rom " + rom_sha);
         if (!a.package_sha256.empty()) net.content.push_back("package " + a.package_sha256);
+        session.append_cartridge_save_identity(net.content);
         std::uint32_t n = 0;
         const rcore_option* decl = core.api->options ? core.api->options(&n) : nullptr;
         for (std::uint32_t i = 0; decl && i < n; ++i) {
