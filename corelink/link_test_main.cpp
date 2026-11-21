@@ -9,6 +9,7 @@
 // menu takes them (link 1.1):
 //   --state-save-at K:PATH   after frame K, save an envelope to PATH
 //   --state-load-at K:PATH   after frame K, load the envelope at PATH
+//   --presentation-at K:WxH  grant this drawable size from frame K onward
 // Each prints one `state:` line with the runner's answer. Accessory data
 // (link 2.1) the way a hub sends it:
 //   --vruN                        the VRU microphone on seat N (1-4)
@@ -32,6 +33,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <map>
 #include <optional>
 #include <string>
 #include <utility>
@@ -98,6 +100,7 @@ int main(int argc, char** argv) {
     std::uint64_t pcm = 0xcbf29ce484222325ull, audio_frames = 0;
     bool seat0 = true;
     bool presentation_test = false;
+    std::map<std::uint64_t, std::pair<std::uint32_t, std::uint32_t>> presentation_sizes;
     bool unpaced = false, cpu_repeat_test = false, cpu_pairs_test = false;
     bool expect_route_end = false;
     std::string restart_route;
@@ -186,6 +189,17 @@ int main(int argc, char** argv) {
         else if (a == "--strict") spec.strict = true;
         else if (a == "--no-seats") seat0 = false;
         else if (a == "--presentation-test") presentation_test = true;
+        else if (a == "--presentation-at") {
+            const auto value = val();
+            unsigned long long field = 0;
+            unsigned width = 0, height = 0;
+            int length = 0;
+            if (std::sscanf(value.c_str(), "%llu:%ux%u%n", &field, &width, &height, &length) != 3 ||
+                static_cast<std::size_t>(length) != value.size() || field == 0 ||
+                ((width == 0) != (height == 0)) ||
+                !presentation_sizes.emplace(field, std::pair{width, height}).second)
+                die("--presentation-at requires a unique K:WxH with a positive frame number");
+        }
         else if (a == "--expect-route-end") expect_route_end = true;
         else if (a == "--opt") {
             const std::string kv = val();
@@ -269,6 +283,7 @@ int main(int argc, char** argv) {
     };
 
     // ---- the same frames headless mode runs, one grant each -----------------
+    std::pair<std::uint32_t, std::uint32_t> drawable, reported_picture;
     bool ok = true;
     for (std::uint64_t k = 1; k <= frames && ok; ++k) {
         for (const AccessorySend& snd : sends) {
@@ -296,11 +311,14 @@ int main(int argc, char** argv) {
             pads[0].axes[RCORE_AXIS_RX] = held & kRLeft ? -32767 : held & kRRight ? 32767 : 0;
             pads[0].axes[RCORE_AXIS_RY] = held & kRUp ? 32767 : held & kRDown ? -32767 : 0;
         }
-        // Fixture exercises resize, unavailable/minimized, then recovery.
-        const std::uint32_t pw = presentation_test && k != 3 ? (k == 1 ? 1280 : 2560) : 0;
-        const std::uint32_t ph = presentation_test && k != 3 ? (k == 1 ? 720 : 1080) : 0;
+        // The fixed fixture resizes, reports no drawable, then recovers.
+        if (presentation_test)
+            drawable = k == 1 ? std::pair{1280u, 720u} :
+                k == 3 ? std::pair{0u, 0u} : std::pair{2560u, 1080u};
+        if (const auto resize = presentation_sizes.find(k); resize != presentation_sizes.end())
+            drawable = resize->second;
         const bool video_requested = k==frames || (video_every && k%video_every==0);
-        if (!link.grant(pads, pw, ph, video_requested)) {
+        if (!link.grant(pads, drawable.first, drawable.second, video_requested)) {
             if (expect_route_end) {
                 link.pump(100);
                 if (link.state()==LinkState::Ended && !link.exit_code()) break;
@@ -311,7 +329,16 @@ int main(int argc, char** argv) {
         print_notifies();
         const bool clean_route_end = expect_route_end && link.state()==LinkState::Ended && !link.exit_code();
         if (link.state() != LinkState::Ready && !clean_route_end) ok = false;
-        if (link.take_frame()) ++pictures;
+        if (link.take_frame()) {
+            ++pictures;
+            const auto* frame = link.frame_info();
+            const auto geometry = std::pair{frame->width, frame->height};
+            if (!presentation_sizes.empty() && geometry != reported_picture) {
+                std::printf("picture-size: %llu %ux%u\n", static_cast<unsigned long long>(k),
+                            static_cast<unsigned>(geometry.first), static_cast<unsigned>(geometry.second));
+                reported_picture = geometry;
+            }
+        }
         if (cpu_repeat_test) {
             const auto* f = link.frame_info();
             const auto* pixels = link.frame_pixels();
