@@ -782,6 +782,7 @@ int main(int argc, char** argv) {
     if (netplay) {
         // Settled before the core runs: rows from the session, the clock from
         // the agreed epoch.
+        session.set_netplay_seat(static_cast<std::uint32_t>(net.slot));
         session.set_input_source([&](std::uint32_t seat, rcore_pad& pad) { pad = ns.seat_pad(seat); });
         session.set_session_clock(net.epoch_s * 1000000ull, [&] { return net_tick; });
     }

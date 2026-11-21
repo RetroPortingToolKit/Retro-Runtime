@@ -556,6 +556,7 @@ int run_link_mode(const LoadedCore& core, const CoreManifest& manifest, const Li
         return exiting(sock, 2, "netplay: " + err);
     std::uint64_t net_tick = 0;
     if (a.netplay) {
+        session.set_netplay_seat(static_cast<std::uint32_t>(a.net.slot));
         session.set_input_source([&](std::uint32_t seat, rcore_pad& pad) { pad = ns.seat_pad(seat); });
         session.set_session_clock(a.net.epoch_s * 1000000ull, [&] { return net_tick; });
     }

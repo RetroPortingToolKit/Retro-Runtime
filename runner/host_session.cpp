@@ -194,6 +194,11 @@ void HostSession::begin_frame_accessories() {
     }
 }
 
+void HostSession::set_netplay_seat(std::uint32_t slot) {
+    const auto it = options_.find("netplay.local_seat");
+    if (it != options_.end()) it->second = std::to_string(slot + 1);
+}
+
 bool HostSession::set_options(const std::map<std::string, std::string>& overrides,
                               std::string* error) {
     options_.clear();

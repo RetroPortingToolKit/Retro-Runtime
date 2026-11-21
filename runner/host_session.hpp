@@ -74,6 +74,7 @@ public:
     // Declared options with their defaults, then `overrides` on top. An
     // override naming an undeclared key is refused (returns false, *error).
     bool set_options(const std::map<std::string, std::string>& overrides, std::string* error);
+    void set_netplay_seat(std::uint32_t slot);
     // Declared keys and their resolved values; nullopt = unset.
     const std::map<std::string, std::optional<std::string>>& options() const { return options_; }
     void set_route(Route* route) { route_ = route; }
