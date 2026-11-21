@@ -46,6 +46,19 @@ std::string errno_text(const char* what) {
     return std::string(what) + ": " + std::strerror(errno);
 }
 
+std::vector<std::string> child_environment(const std::vector<std::string>& overrides) {
+    std::vector<std::string> result;
+    for (char** e = environ; e && *e; ++e) {
+        const std::string kv = *e;
+        const std::string name = kv.substr(0, kv.find('='));
+        const bool overridden = std::any_of(overrides.begin(), overrides.end(),
+            [&](const std::string& o) { return o.compare(0, name.size() + 1, name + "=") == 0; });
+        if (!overridden) result.push_back(kv);
+    }
+    result.insert(result.end(), overrides.begin(), overrides.end());
+    return result;
+}
+
 #if defined(__APPLE__)
 void set_cloexec(int fd) {
     const int flags = ::fcntl(fd, F_GETFD);
@@ -340,15 +353,7 @@ bool spawn_runner(const SpawnSpec& spec, const SharedMemory& region, Channel& hu
     argv.push_back(nullptr);
     // The whole environment, built before the spawn: nothing between fork and
     // exec may allocate (the hub has other threads). spec.env overrides by name.
-    std::vector<std::string> env_strings;
-    for (char** e = environ; e && *e; ++e) {
-        const std::string kv = *e;
-        const std::string name = kv.substr(0, kv.find('='));
-        const bool overridden = std::any_of(spec.env.begin(), spec.env.end(),
-            [&](const std::string& o) { return o.compare(0, name.size() + 1, name + "=") == 0; });
-        if (!overridden) env_strings.push_back(kv);
-    }
-    env_strings.insert(env_strings.end(), spec.env.begin(), spec.env.end());
+    auto env_strings = child_environment(spec.env);
     std::vector<char*> envp;
     for (auto& s : env_strings) envp.push_back(s.data());
     envp.push_back(nullptr);
@@ -465,9 +470,7 @@ std::optional<int> run_to_completion(const SpawnSpec& spec, int timeout_ms, std:
     std::vector<char*> argv;
     for (auto& s : args) argv.push_back(s.data());
     argv.push_back(nullptr);
-    std::vector<std::string> env_strings;
-    for (char** e = environ; e && *e; ++e) env_strings.push_back(*e);
-    env_strings.insert(env_strings.end(), spec.env.begin(), spec.env.end());
+    auto env_strings = child_environment(spec.env);
     std::vector<char*> envp;
     for (auto& s : env_strings) envp.push_back(s.data());
     envp.push_back(nullptr);
